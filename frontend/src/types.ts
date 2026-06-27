@@ -15,4 +15,5 @@ export interface ArtworkSummary {
   couleurs_dominantes: string[]
   ambiance: string
   sujets: string[]
+  artist_id: string | null
 }

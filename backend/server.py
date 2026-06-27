@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from backend.analyzer import analyze_artwork
+from backend.matcher import match_artist
 from backend.narrator import narrate
 from backend.profile import load_profile_text, save_profile
 
@@ -56,6 +57,7 @@ async def analyze(file: UploadFile = File(...)):
     media_type = file.content_type or "image/jpeg"
     try:
         result = analyze_artwork(image_bytes, media_type, load_profile_text())
+        result["artist_id"] = match_artist(result.get("artiste_probable"))
         _save(result)
         return JSONResponse(result)
     except Exception as e:

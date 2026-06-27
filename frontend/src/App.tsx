@@ -1,509 +1,156 @@
-import { useRef, useState } from 'react'
-import type { ArtworkSummary, VisitorProfile } from './types'
+import { useState } from 'react'
+import PageI from './PageI'
+import PageII from './PageII'
+import { getArtistById, getLevel, MAX_SCANS } from './data'
 
-const MAX_PX = 1600
-const JPEG_QUALITY = 0.85
-const PROFILE_DONE_KEY = 'genz-museum-profile-done'
+const PROGRESS_KEY = 'genz-museum-progress'
 
-const AGE_OPTIONS = ['Enfant (-12 ans)', 'Ado (12-17 ans)', 'Adulte (18-64 ans)', 'Senior (65 ans et +)']
-const LEVEL_OPTIONS = ['Novice', 'Amateur', 'Expert']
-const INTEREST_OPTIONS = ['Histoire et contexte', 'Anecdotes insolites', 'Technique artistique', 'Symbolisme et interprétation']
-const TONE_OPTIONS = ['Ludique et accessible', 'Équilibré', 'Sérieux et académique']
-
-function resizeImage(file: File): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => {
-      const scale = Math.min(1, MAX_PX / Math.max(img.width, img.height))
-      const w = Math.round(img.width * scale)
-      const h = Math.round(img.height * scale)
-      const canvas = document.createElement('canvas')
-      canvas.width = w
-      canvas.height = h
-      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
-      canvas.toBlob(
-        (blob) => blob ? resolve(blob) : reject(new Error('Canvas vide')),
-        'image/jpeg',
-        JPEG_QUALITY,
-      )
-    }
-    img.onerror = reject
-    img.src = URL.createObjectURL(file)
-  })
+function getProgress(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') }
+  catch { return {} }
 }
 
-type NarrateState = 'idle' | 'loading' | 'ready' | 'playing' | 'done' | 'error'
+type Tab = 'camera' | 'achievements'
 
-type State =
-  | { status: 'onboarding' }
-  | { status: 'idle' }
-  | { status: 'loading'; preview: string }
-  | { status: 'result'; preview: string; data: ArtworkSummary }
-  | { status: 'error'; preview: string; message: string }
+interface Toast {
+  artistName: string
+  level: string
+  isNew: boolean
+  color: string
+}
 
 export default function App() {
-  const [state, setState] = useState<State>(() =>
-    sessionStorage.getItem(PROFILE_DONE_KEY) ? { status: 'idle' } : { status: 'onboarding' },
-  )
-  const [narrateState, setNarrateState] = useState<NarrateState>('idle')
-  const inputRef = useRef<HTMLInputElement>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [tab, setTab] = useState<Tab>('camera')
+  const [toast, setToast] = useState<Toast | null>(null)
+  const [toastTimer, setToastTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
 
-  async function handleFile(file: File) {
-    const preview = URL.createObjectURL(file)
-    setState({ status: 'loading', preview })
+  function handleArtistFound(artistId: string) {
+    const found = getArtistById(artistId)
+    if (!found) return
 
-    const blob = await resizeImage(file)
-    const form = new FormData()
-    form.append('file', blob, 'photo.jpg')
+    const prog = getProgress()
+    const prev = prog[artistId] ?? 0
+    if (prev >= MAX_SCANS) return // déjà expert
 
-    try {
-      const res = await fetch('/analyze', { method: 'POST', body: form })
-      if (!res.ok) throw new Error(`Erreur serveur (${res.status})`)
-      const data: ArtworkSummary = await res.json()
-      setState({ status: 'result', preview, data })
-      prefetchAudio(data)
-    } catch (err) {
-      setState({ status: 'error', preview, message: (err as Error).message })
-    }
-  }
+    const next = Math.min(prev + 1, MAX_SCANS)
+    prog[artistId] = next
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify(prog))
 
-  // Charge l'audio en arrière-plan sans le jouer — play() sera appelé par un tap utilisateur
-  async function prefetchAudio(data: ArtworkSummary) {
-    setNarrateState('loading')
-    try {
-      const res = await fetch('/narrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      })
-      if (!res.ok) throw new Error()
-      const blob = await res.blob()
-      const audio = new Audio(URL.createObjectURL(blob))
-      audio.onended = () => setNarrateState('done')
-      audio.onerror = () => setNarrateState('error')
-      audioRef.current = audio
-      setNarrateState('ready')
-    } catch {
-      setNarrateState('error')
-    }
-  }
-
-  // Appelé directement par un tap — contexte de geste OK pour iOS/Android
-  function playAudio() {
-    if (!audioRef.current) return
-    audioRef.current.currentTime = 0
-    audioRef.current.play()
-    setNarrateState('playing')
-  }
-
-  function reset() {
-    audioRef.current?.pause()
-    audioRef.current = null
-    setNarrateState('idle')
-    setState({ status: 'idle' })
-    if (inputRef.current) inputRef.current.value = ''
+    if (toastTimer) clearTimeout(toastTimer)
+    setToast({
+      artistName: found.artist.name,
+      level: getLevel(next),
+      isNew: prev === 0,
+      color: found.movement.color,
+    })
+    setToastTimer(setTimeout(() => setToast(null), 3500))
   }
 
   return (
-    <div style={styles.root}>
-      <div style={styles.container}>
-        {/* Header */}
-        <h1 style={styles.h1}>Analyse d'œuvre</h1>
-
-        {/* Onboarding */}
-        {state.status === 'onboarding' && (
-          <Onboarding onDone={() => setState({ status: 'idle' })} />
-        )}
-
-        {/* Camera trigger — always visible */}
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) handleFile(file)
-          }}
-        />
-
-        {state.status === 'idle' && (
-          <button style={styles.btn} onClick={() => inputRef.current?.click()}>
-            📷 Prendre une photo
-          </button>
-        )}
-
-        {/* Preview */}
-        {state.status !== 'idle' && state.status !== 'onboarding' && (
-          <img src={state.preview} alt="photo prise" style={styles.preview} />
-        )}
-
-        {/* Spinner */}
-        {state.status === 'loading' && (
-          <div style={styles.spinnerWrap}>
-            <div style={styles.spinner} />
-            <span style={styles.hint}>Analyse en cours…</span>
-          </div>
-        )}
-
-        {/* Error */}
-        {state.status === 'error' && (
-          <>
-            <p style={styles.error}>{state.message}</p>
-            <button style={styles.btn} onClick={reset}>Réessayer</button>
-          </>
-        )}
-
-        {/* Result */}
-        {state.status === 'result' && (
-          <Result data={state.data} onReset={reset} narrateState={narrateState} onPlay={playAudio} />
-        )}
+    <div style={s.root}>
+      <div style={s.scrollArea}>
+        {tab === 'camera'
+          ? <PageI onArtistFound={handleArtistFound} />
+          : <PageII />}
       </div>
-    </div>
-  )
-}
 
-function Onboarding({ onDone }: { onDone: () => void }) {
-  const [ageRange, setAgeRange] = useState<string | null>(null)
-  const [level, setLevel] = useState<string | null>(null)
-  const [interests, setInterests] = useState<string[]>([])
-  const [tone, setTone] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-
-  const canSubmit = ageRange !== null && level !== null && tone !== null && !submitting
-
-  function toggleInterest(item: string) {
-    setInterests((prev) => (prev.includes(item) ? prev.filter((i) => i !== item) : [...prev, item]))
-  }
-
-  async function submit() {
-    if (!canSubmit) return
-    setSubmitting(true)
-    const profile: VisitorProfile = { age_range: ageRange!, level: level!, interests, tone: tone! }
-    try {
-      await fetch('/profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(profile),
-      })
-    } finally {
-      sessionStorage.setItem(PROFILE_DONE_KEY, '1')
-      onDone()
-    }
-  }
-
-  return (
-    <div style={styles.resultWrap}>
-      <p style={styles.hint}>Quelques questions pour adapter le guide à toi.</p>
-      <Choice label="Ton âge" options={AGE_OPTIONS} value={ageRange} onChange={setAgeRange} />
-      <Choice label="Ton niveau en art" options={LEVEL_OPTIONS} value={level} onChange={setLevel} />
-      <MultiChoice label="Ce qui t'intéresse" options={INTEREST_OPTIONS} values={interests} onToggle={toggleInterest} />
-      <Choice label="Le ton que tu préfères" options={TONE_OPTIONS} value={tone} onChange={setTone} />
-      <button style={{ ...styles.btn, opacity: canSubmit ? 1 : 0.5 }} disabled={!canSubmit} onClick={submit}>
-        {submitting ? 'Préparation…' : 'Commencer la visite'}
-      </button>
-    </div>
-  )
-}
-
-function Choice({
-  label, options, value, onChange,
-}: {
-  label: string
-  options: string[]
-  value: string | null
-  onChange: (v: string) => void
-}) {
-  return (
-    <div style={styles.card}>
-      <div style={styles.cardLabel}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {options.map((opt) => (
-          <button
-            key={opt}
-            type="button"
-            style={{ ...styles.choice, ...(value === opt ? styles.choiceSelected : {}) }}
-            onClick={() => onChange(opt)}
-          >
-            {opt}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function MultiChoice({
-  label, options, values, onToggle,
-}: {
-  label: string
-  options: string[]
-  values: string[]
-  onToggle: (v: string) => void
-}) {
-  return (
-    <div style={styles.card}>
-      <div style={styles.cardLabel}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {options.map((opt) => (
-          <button
-            key={opt}
-            type="button"
-            style={{ ...styles.choice, ...(values.includes(opt) ? styles.choiceSelected : {}) }}
-            onClick={() => onToggle(opt)}
-          >
-            {opt}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-const NARRATE_LABEL: Record<string, string> = {
-  loading: '⏳ Préparation audio…',
-  ready:   '🔊 Écouter le résumé',
-  playing: '🔊 Lecture…',
-  done:    '🔁 Réécouter',
-  error:   '⚠️ Narration indisponible',
-}
-
-function Result({
-  data, onReset, narrateState, onPlay,
-}: {
-  data: ArtworkSummary
-  onReset: () => void
-  narrateState: NarrateState
-  onPlay: () => void
-}) {
-  const canTap = narrateState === 'ready' || narrateState === 'done'
-  return (
-    <div style={styles.resultWrap}>
-      {narrateState !== 'idle' && (
-        <button
-          style={{ ...styles.audioBtn, opacity: canTap ? 1 : 0.5 }}
-          disabled={!canTap}
-          onClick={onPlay}
-        >
-          {NARRATE_LABEL[narrateState]}
-        </button>
-      )}
-      <Card label="Titre probable" value={data.titre_probable ?? '—'} large />
-      <Card label="Artiste probable" value={data.artiste_probable ?? '—'} large />
-      <Card label="Style" value={data.style} />
-      {data.epoque && <Card label="Époque" value={data.epoque} />}
-      {data.technique && <Card label="Technique" value={data.technique} />}
-      <Card label="Description" value={data.description} />
-      <Card label="Ambiance" value={data.ambiance} />
-      <Card label="Sujets">
-        <Tags items={data.sujets} />
-      </Card>
-      <Card label="Couleurs dominantes">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {data.couleurs_dominantes.map((c) => (
-            <span key={c} style={styles.colorTag}>
-              <span
-                style={{
-                  ...styles.dot,
-                  background: c.toLowerCase(),
-                  border: '1px solid rgba(255,255,255,.2)',
-                }}
-              />
-              {c}
-            </span>
-          ))}
+      {/* Toast notification */}
+      {toast && (
+        <div style={{ ...s.toast, borderColor: toast.color }}>
+          <span style={{ color: toast.color, fontWeight: 700 }}>
+            {toast.isNew ? '🎨 Découverte !' : '⬆️ Progression'}
+          </span>
+          <span>{toast.artistName}</span>
+          <span style={{ ...s.toastLevel, background: toast.color + '22', color: toast.color }}>
+            {toast.level}
+          </span>
         </div>
-      </Card>
-      <button style={{ ...styles.btn, marginTop: 8 }} onClick={onReset}>
-        📷 Nouvelle photo
-      </button>
+      )}
+
+      {/* Tab bar */}
+      <nav style={s.tabBar}>
+        <TabBtn icon="📷" label="Scanner" active={tab === 'camera'} onClick={() => setTab('camera')} />
+        <TabBtn icon="🏆" label="Collection" active={tab === 'achievements'} onClick={() => setTab('achievements')} />
+      </nav>
     </div>
   )
 }
 
-function Card({
-  label,
-  value,
-  large,
-  children,
-}: {
-  label: string
-  value?: string
-  large?: boolean
-  children?: React.ReactNode
+function TabBtn({ icon, label, active, onClick }: {
+  icon: string; label: string; active: boolean; onClick: () => void
 }) {
   return (
-    <div style={styles.card}>
-      <div style={styles.cardLabel}>{label}</div>
-      {value !== undefined && (
-        <div style={large ? styles.cardValueLarge : styles.cardValue}>{value}</div>
-      )}
-      {children}
-    </div>
+    <button style={{ ...s.tabBtn, opacity: active ? 1 : 0.45 }} onClick={onClick}>
+      <span style={s.tabIcon}>{icon}</span>
+      <span style={{ ...s.tabLabel, fontWeight: active ? 700 : 400 }}>{label}</span>
+    </button>
   )
 }
 
-function Tags({ items }: { items: string[] }) {
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      {items.map((t) => (
-        <span key={t} style={styles.tag}>{t}</span>
-      ))}
-    </div>
-  )
-}
-
-const styles = {
+const s = {
   root: {
     minHeight: '100vh',
     background: '#0f0f0f',
     color: '#f0f0f0',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     display: 'flex',
+    flexDirection: 'column' as const,
+    position: 'relative' as const,
+  },
+  scrollArea: {
+    flex: 1,
+    overflowY: 'auto' as const,
+    paddingBottom: 80,
+    display: 'flex',
     justifyContent: 'center',
   },
-  container: {
-    width: '100%',
-    maxWidth: 500,
-    padding: '2rem 1.2rem 4rem',
+  toast: {
+    position: 'fixed' as const,
+    top: 16,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: '#1a1a1a',
+    border: '1px solid',
+    borderRadius: 14,
+    padding: '10px 16px',
     display: 'flex',
-    flexDirection: 'column' as const,
     alignItems: 'center',
-    gap: '1.2rem',
+    gap: 10,
+    fontSize: '.85rem',
+    zIndex: 100,
+    whiteSpace: 'nowrap' as const,
+    boxShadow: '0 4px 24px rgba(0,0,0,.6)',
   },
-  h1: {
-    fontSize: '1.4rem',
+  toastLevel: {
+    padding: '2px 10px',
+    borderRadius: 20,
+    fontSize: '.75rem',
     fontWeight: 600,
-    letterSpacing: '.02em',
-    marginBottom: '.5rem',
   },
-  btn: {
-    background: '#fff',
-    color: '#111',
+  tabBar: {
+    position: 'fixed' as const,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 72,
+    background: '#141414',
+    borderTop: '1px solid #222',
+    display: 'flex',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    zIndex: 50,
+  },
+  tabBtn: {
+    background: 'none',
     border: 'none',
-    borderRadius: 50,
-    padding: '.85rem 2rem',
-    fontSize: '1rem',
-    fontWeight: 600,
+    color: '#f0f0f0',
     cursor: 'pointer',
-    width: '100%',
-    maxWidth: 300,
-  },
-  preview: {
-    width: '100%',
-    borderRadius: 14,
-    objectFit: 'cover' as const,
-    maxHeight: 340,
-  },
-  spinnerWrap: {
     display: 'flex',
     flexDirection: 'column' as const,
     alignItems: 'center',
-    gap: 12,
+    gap: 3,
+    padding: '8px 24px',
   },
-  spinner: {
-    width: 44,
-    height: 44,
-    border: '4px solid #333',
-    borderTopColor: '#fff',
-    borderRadius: '50%',
-    animation: 'spin .8s linear infinite',
-  },
-  hint: {
-    opacity: 0.5,
-    fontSize: '.9rem',
-  },
-  error: {
-    color: '#ff6b6b',
-    textAlign: 'center' as const,
-  },
-  resultWrap: {
-    width: '100%',
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '.75rem',
-  },
-  card: {
-    background: '#1c1c1c',
-    borderRadius: 14,
-    padding: '1rem 1.2rem',
-  },
-  cardLabel: {
-    fontSize: '.68rem',
-    textTransform: 'uppercase' as const,
-    letterSpacing: '.1em',
-    opacity: 0.45,
-    marginBottom: 4,
-  },
-  cardValue: {
-    fontSize: '1rem',
-    lineHeight: 1.55,
-  },
-  cardValueLarge: {
-    fontSize: '1.15rem',
-    fontWeight: 600,
-    lineHeight: 1.4,
-  },
-  choice: {
-    background: '#2a2a2a',
-    color: '#f0f0f0',
-    border: '1px solid transparent',
-    borderRadius: 20,
-    padding: '6px 12px',
-    fontSize: '.85rem',
-    cursor: 'pointer',
-  },
-  choiceSelected: {
-    background: '#fff',
-    color: '#111',
-    border: '1px solid #fff',
-  },
-  audioBtn: {
-    background: '#1c1c1c',
-    color: '#f0f0f0',
-    border: '1px solid #333',
-    borderRadius: 50,
-    padding: '.7rem 1.6rem',
-    fontSize: '1rem',
-    cursor: 'pointer',
-    width: '100%',
-    textAlign: 'center' as const,
-  },
-  tag: {
-    background: '#2a2a2a',
-    borderRadius: 20,
-    padding: '4px 10px',
-    fontSize: '.85rem',
-  },
-  choice: {
-    background: '#2a2a2a',
-    color: '#f0f0f0',
-    border: '1px solid transparent',
-    borderRadius: 20,
-    padding: '6px 12px',
-    fontSize: '.85rem',
-    cursor: 'pointer',
-  },
-  choiceSelected: {
-    background: '#fff',
-    color: '#111',
-    border: '1px solid #fff',
-  },
-  colorTag: {
-    background: '#2a2a2a',
-    borderRadius: 20,
-    padding: '4px 10px',
-    fontSize: '.85rem',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-  },
-  dot: {
-    width: 12,
-    height: 12,
-    borderRadius: '50%',
-    flexShrink: 0,
-  },
+  tabIcon: { fontSize: '1.4rem' },
+  tabLabel: { fontSize: '.65rem', letterSpacing: '.05em' },
 } as const
