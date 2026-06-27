@@ -3,7 +3,9 @@ import type { ArtworkSummary, VisitorProfile } from './types'
 
 const MAX_PX = 1600
 const JPEG_QUALITY = 0.85
+const ONBOARDED_KEY = 'genz-museum-onboarded'
 
+const LANGUAGE_OPTIONS = ['Français', 'English']
 const AGE_OPTIONS = ['Enfant (-12 ans)', 'Ado (12-17 ans)', 'Adulte (18-64 ans)', 'Senior (65 ans et +)']
 const LEVEL_OPTIONS = ['Novice', 'Amateur', 'Expert']
 const INTEREST_OPTIONS = ['Histoire et contexte', 'Anecdotes insolites', 'Technique artistique', 'Symbolisme et interprétation']
@@ -40,8 +42,12 @@ type State =
   | { status: 'result'; preview: string; data: ArtworkSummary }
   | { status: 'error'; preview: string; message: string }
 
-export default function PageI({ onArtistFound }: { onArtistFound: (id: string) => void }) {
-  const [state, setState] = useState<State>({ status: 'onboarding' })
+export default function PageI({ onArtistFound, onNewProfile, hidden }: {
+  onArtistFound: (id: string) => void; onNewProfile: () => void; hidden: boolean
+}) {
+  const [state, setState] = useState<State>(() =>
+    localStorage.getItem(ONBOARDED_KEY) ? { status: 'idle' } : { status: 'onboarding' },
+  )
   const [narrateState, setNarrateState] = useState<NarrateState>('idle')
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -105,12 +111,23 @@ export default function PageI({ onArtistFound }: { onArtistFound: (id: string) =
     if (inputRef.current) inputRef.current.value = ''
   }
 
+  async function newProfile() {
+    if (!confirm('Archiver la visite actuelle et créer un nouveau profil ?')) return
+    try {
+      await fetch('/new-profile', { method: 'POST' })
+    } finally {
+      onNewProfile()
+      localStorage.removeItem(ONBOARDED_KEY)
+      setState({ status: 'onboarding' })
+    }
+  }
+
   return (
-    <div style={s.page}>
+    <div style={{ ...s.page, display: hidden ? 'none' : 'flex' }}>
       <h1 style={s.h1}>Analyse d'œuvre</h1>
 
       {state.status === 'onboarding' && (
-        <Onboarding onDone={() => setState({ status: 'idle' })} />
+        <Onboarding onDone={() => { localStorage.setItem(ONBOARDED_KEY, '1'); setState({ status: 'idle' }) }} />
       )}
 
       <input
@@ -123,9 +140,14 @@ export default function PageI({ onArtistFound }: { onArtistFound: (id: string) =
       />
 
       {state.status === 'idle' && (
-        <button style={s.btn} onClick={() => inputRef.current?.click()}>
-          📷 Prendre une photo
-        </button>
+        <>
+          <button style={s.btn} onClick={() => inputRef.current?.click()}>
+            📷 Prendre une photo
+          </button>
+          <button style={s.btnSecondary} onClick={newProfile}>
+            🔄 Nouveau profil
+          </button>
+        </>
       )}
 
       {state.status !== 'idle' && state.status !== 'onboarding' && (
@@ -154,17 +176,18 @@ export default function PageI({ onArtistFound }: { onArtistFound: (id: string) =
 }
 
 function Onboarding({ onDone }: { onDone: () => void }) {
+  const [language, setLanguage] = useState<string | null>(null)
   const [ageRange, setAgeRange] = useState<string | null>(null)
   const [level, setLevel] = useState<string | null>(null)
   const [interests, setInterests] = useState<string[]>([])
   const [tone, setTone] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const canSubmit = ageRange !== null && level !== null && tone !== null && !submitting
+  const canSubmit = language !== null && ageRange !== null && level !== null && tone !== null && !submitting
 
   async function submit() {
     if (!canSubmit) return
     setSubmitting(true)
-    const profile: VisitorProfile = { age_range: ageRange!, level: level!, interests, tone: tone! }
+    const profile: VisitorProfile = { language: language!, age_range: ageRange!, level: level!, interests, tone: tone! }
     try {
       await fetch('/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) })
     } finally {
@@ -175,6 +198,7 @@ function Onboarding({ onDone }: { onDone: () => void }) {
   return (
     <div style={s.col}>
       <p style={s.dim}>Quelques questions pour adapter le guide à toi.</p>
+      <Choice label="Langue / Language" options={LANGUAGE_OPTIONS} value={language} onChange={setLanguage} />
       <Choice label="Ton âge" options={AGE_OPTIONS} value={ageRange} onChange={setAgeRange} />
       <Choice label="Ton niveau en art" options={LEVEL_OPTIONS} value={level} onChange={setLevel} />
       <MultiChoice label="Ce qui t'intéresse" options={INTEREST_OPTIONS} values={interests}
@@ -289,6 +313,7 @@ const s = {
   col: { width: '100%', display: 'flex', flexDirection: 'column' as const, gap: '.75rem' },
   h1: { fontSize: '1.4rem', fontWeight: 600, letterSpacing: '.02em', marginBottom: '.5rem' },
   btn: { background: '#fff', color: '#111', border: 'none', borderRadius: 50, padding: '.85rem 2rem', fontSize: '1rem', fontWeight: 600, cursor: 'pointer', width: '100%', maxWidth: 300 },
+  btnSecondary: { background: 'none', color: '#f0f0f0', border: '1px solid #333', borderRadius: 50, padding: '.7rem 2rem', fontSize: '.9rem', fontWeight: 500, cursor: 'pointer', width: '100%', maxWidth: 300 },
   audioBtn: { background: '#1c1c1c', color: '#f0f0f0', border: '1px solid #333', borderRadius: 50, padding: '.7rem 1.6rem', fontSize: '1rem', cursor: 'pointer', width: '100%', textAlign: 'center' as const },
   preview: { width: '100%', borderRadius: 14, objectFit: 'cover' as const, maxHeight: 340 },
   spinnerWrap: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 12 },

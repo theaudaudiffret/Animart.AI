@@ -1,0 +1,24 @@
+{
+  "titre_probable": null,
+  "artiste_probable": null,
+  "style": "Photographie du quotidien (pas vraiment une œuvre d'art classique !)",
+  "epoque": "Notre époque, les années 2020",
+  "technique": "Photo prise avec un téléphone",
+  "description": "Coucou petit explorateur ! Ici, ce n'est pas un tableau ancien dans un musée, mais une photo prise de nos jours. On voit un ordinateur portable ouvert avec plein de lettres et de chiffres colorés sur l'écran : c'est quelqu'un qui écrit du code informatique pour fabriquer un programme ou un site web. Devant l'écran, il y a un grand doigt qui pointe vers quelque chose, comme pour dire 'regarde ici !'. On aperçoit aussi un clavier gris, et au fond une jolie salle avec des chaises jaunes, des plantes vertes et un mur vert. C'est un peu comme un café ou un espace de travail moderne où les gens travaillent sur leurs ordinateurs.",
+  "couleurs_dominantes": [
+    "noir",
+    "vert",
+    "jaune",
+    "gris",
+    "bleu"
+  ],
+  "ambiance": "Une ambiance studieuse et tranquille, comme quand on est très concentré sur un travail rigolo. On dirait qu'il se passe quelque chose d'important sur l'écran !",
+  "sujets": [
+    "technologie",
+    "informatique",
+    "vie quotidienne",
+    "scène d'intérieur"
+  ],
+  "artist_id": null,
+  "_phash": "e80881818b08b570"
+}

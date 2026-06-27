@@ -1,4 +1,5 @@
 export interface VisitorProfile {
+  language: string
   age_range: string
   level: string
   interests: string[]

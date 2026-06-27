@@ -9,6 +9,7 @@ def save_profile(data: dict) -> None:
     lines = [
         "# Mémoire long terme — Profil du visiteur",
         "",
+        f"- Langue : {data.get('language') or 'Français'}",
         f"- Tranche d'âge : {data.get('age_range') or '—'}",
         f"- Niveau en art : {data.get('level') or '—'}",
         f"- Centres d'intérêt : {', '.join(interests) if interests else '—'}",

@@ -1,6 +1,6 @@
 import json
+import shutil
 import socket
-from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +23,7 @@ load_dotenv()
 ROOT = Path(__file__).parent.parent
 ANALYSES_DIR = ROOT / "analyses"
 ANALYSES_DIR.mkdir(exist_ok=True)
+OLD_PROFILES_DIR = ROOT / "old-profiles"
 AUDIO_DIR = ANALYSES_DIR / "audio"
 AUDIO_DIR.mkdir(exist_ok=True)
 PHOTOS_DIR = ANALYSES_DIR / "photos"
@@ -40,13 +41,7 @@ def _reset_memories() -> None:
     LONG_TERM_MEMORY.write_text(LONG_TERM_INITIAL, encoding="utf-8")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    _reset_memories()
-    yield
-
-
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -55,6 +50,30 @@ async def profile_route(request: Request):
     data = await request.json()
     save_profile(data)
     return JSONResponse({"ok": True})
+
+
+def _archive_analyses() -> int | None:
+    """Déplace le contenu courant de analyses/ dans old-profiles/N (N auto-incrémenté)."""
+    if not any(ANALYSES_DIR.glob("*.json")):
+        return None  # rien d'analysé à archiver
+    items = [p for p in ANALYSES_DIR.iterdir() if p.name != ".gitkeep"]
+    OLD_PROFILES_DIR.mkdir(exist_ok=True)
+    existing = [int(p.name) for p in OLD_PROFILES_DIR.iterdir() if p.is_dir() and p.name.isdigit()]
+    n = max(existing) + 1 if existing else 1
+    dest = OLD_PROFILES_DIR / str(n)
+    dest.mkdir()
+    for item in items:
+        shutil.move(str(item), str(dest / item.name))
+    return n
+
+
+@app.post("/new-profile")
+async def new_profile_route():
+    archived = _archive_analyses()
+    AUDIO_DIR.mkdir(exist_ok=True)
+    PHOTOS_DIR.mkdir(exist_ok=True)
+    _reset_memories()
+    return JSONResponse({"ok": True, "archived": archived})
 
 
 @app.post("/analyze")

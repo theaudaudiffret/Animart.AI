@@ -52,7 +52,7 @@ export default function App() {
   return (
     <div style={s.root}>
       <div style={s.scrollArea}>
-        {tab === 'camera' && <PageI onArtistFound={handleArtistFound} />}
+        <PageI hidden={tab !== 'camera'} onArtistFound={handleArtistFound} onNewProfile={() => localStorage.removeItem(PROGRESS_KEY)} />
         {tab === 'achievements' && <PageII />}
         {tab === 'library' && <PageBiblio />}
       </div>
