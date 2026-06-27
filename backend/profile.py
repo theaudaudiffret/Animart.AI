@@ -1,5 +1,3 @@
-"""Profil du visiteur : questionnaire rempli une fois par visite, sauvegardé en
-markdown et réinjecté comme contexte pour personnaliser les analyses."""
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent

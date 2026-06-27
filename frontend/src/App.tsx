@@ -446,6 +446,20 @@ const styles = {
     fontWeight: 600,
     lineHeight: 1.4,
   },
+  choice: {
+    background: '#2a2a2a',
+    color: '#f0f0f0',
+    border: '1px solid transparent',
+    borderRadius: 20,
+    padding: '6px 12px',
+    fontSize: '.85rem',
+    cursor: 'pointer',
+  },
+  choiceSelected: {
+    background: '#fff',
+    color: '#111',
+    border: '1px solid #fff',
+  },
   audioBtn: {
     background: '#1c1c1c',
     color: '#f0f0f0',

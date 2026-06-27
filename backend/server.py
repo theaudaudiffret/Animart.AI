@@ -47,7 +47,7 @@ async def analyze(file: UploadFile = File(...)):
 async def narrate_route(request: Request):
     data = await request.json()
     try:
-        audio_bytes = narrate(data)
+        audio_bytes = narrate(data, load_profile_text())
         return Response(content=audio_bytes, media_type="audio/mpeg")
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)

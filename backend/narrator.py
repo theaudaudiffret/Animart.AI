@@ -1,57 +1,80 @@
+import json
 import os
+from datetime import datetime
+from pathlib import Path
+
+import anthropic
 from elevenlabs.client import ElevenLabs
 
-# Charlotte — voix multilingue ElevenLabs, fonctionne bien en français
-DEFAULT_VOICE_ID = "XB0fDUnXU5powFXDhCwa"
+ROOT = Path(__file__).parent.parent
+NARRATION_PROMPT = ROOT / "docs" / "narration_prompt.md"
+SHORT_TERM_MEMORY = ROOT / "docs" / "short_term_memory.md"
+LONG_TERM_MEMORY = ROOT / "docs" / "long_term_memory.md"
+
+MAX_MEMORY_ENTRIES = 10
+DEFAULT_VOICE_ID = "XB0fDUnXU5powFXDhCwa"  # Charlotte — multilingue
 
 
-def summary_to_text(data: dict) -> str:
-    parts = []
-    titre = data.get("titre_probable")
-    artiste = data.get("artiste_probable")
-    style = data.get("style")
-    epoque = data.get("epoque")
-    technique = data.get("technique")
-    description = data.get("description")
-    ambiance = data.get("ambiance")
-    sujets: list = data.get("sujets") or []
+def _generate_narration_text(data: dict, visitor_profile: str | None = None) -> str:
+    system = NARRATION_PROMPT.read_text(encoding="utf-8")
+    short_mem = SHORT_TERM_MEMORY.read_text(encoding="utf-8")
+    long_mem = LONG_TERM_MEMORY.read_text(encoding="utf-8") if LONG_TERM_MEMORY.exists() else ""
 
-    if titre and artiste:
-        parts.append(f"Cette œuvre, intitulée {titre}, est attribuée à {artiste}.")
-    elif titre:
-        parts.append(f"Cette œuvre est probablement intitulée {titre}.")
-    elif artiste:
-        parts.append(f"Cette œuvre est attribuée à {artiste}.")
+    profile_section = f"\n## Profil du visiteur\n\n{visitor_profile}\n" if visitor_profile else ""
 
-    if style and epoque:
-        parts.append(f"Il s'agit d'une œuvre de style {style}, datant du {epoque}.")
-    elif style:
-        parts.append(f"Il s'agit d'une œuvre de style {style}.")
+    user_content = f"""## Analyse de l'œuvre
 
-    if technique:
-        parts.append(f"Elle est réalisée en {technique}.")
+```json
+{json.dumps(data, ensure_ascii=False, indent=2)}
+```
+{profile_section}
+## Mémoire court terme (visites récentes)
 
-    if description:
-        parts.append(description)
+{short_mem}
 
-    if ambiance:
-        parts.append(f"L'ambiance qui se dégage de cette œuvre est {ambiance}.")
+## Mémoire long terme
 
-    if sujets:
-        parts.append(f"Les thèmes abordés sont : {', '.join(sujets)}.")
+{long_mem}"""
 
-    return " ".join(parts)
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-opus-4-8",
+        max_tokens=512,
+        system=system,
+        messages=[{"role": "user", "content": user_content}],
+    )
+    return response.content[0].text.strip()
 
 
-def narrate(data: dict) -> bytes:
-    text = summary_to_text(data)
+def _update_short_term_memory(narration_text: str) -> None:
+    new_entry = f"## {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{narration_text}\n"
+
+    content = SHORT_TERM_MEMORY.read_text(encoding="utf-8")
+    header = "# Mémoire court terme — visites récentes\n\n"
+
+    # Découper en entrées (FIFO) : chaque section commence par "## "
+    parts = content.split("\n## ")
+    entries = [f"## {p}".rstrip() for p in parts if p.strip() and not p.startswith("#")]
+    entries.append(new_entry)
+    entries = entries[-MAX_MEMORY_ENTRIES:]  # first-in first-out
+
+    SHORT_TERM_MEMORY.write_text(header + "\n\n".join(entries) + "\n", encoding="utf-8")
+
+
+def narrate(data: dict, visitor_profile: str | None = None) -> bytes:
+    narration_text = _generate_narration_text(data, visitor_profile)
+
     client = ElevenLabs(api_key=os.environ["ELEVENLABS_API_KEY"])
     voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_VOICE_ID)
 
     audio_iter = client.text_to_speech.convert(
         voice_id=voice_id,
-        text=text,
+        text=narration_text,
         model_id="eleven_multilingual_v2",
         output_format="mp3_44100_128",
     )
-    return b"".join(audio_iter)
+    audio = b"".join(audio_iter)
+
+    _update_short_term_memory(narration_text)
+
+    return audio
