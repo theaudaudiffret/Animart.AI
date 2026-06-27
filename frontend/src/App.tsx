@@ -1,8 +1,14 @@
 import { useRef, useState } from 'react'
-import type { ArtworkSummary } from './types'
+import type { ArtworkSummary, VisitorProfile } from './types'
 
 const MAX_PX = 1600
 const JPEG_QUALITY = 0.85
+const PROFILE_DONE_KEY = 'genz-museum-profile-done'
+
+const AGE_OPTIONS = ['Enfant (-12 ans)', 'Ado (12-17 ans)', 'Adulte (18-64 ans)', 'Senior (65 ans et +)']
+const LEVEL_OPTIONS = ['Novice', 'Amateur', 'Expert']
+const INTEREST_OPTIONS = ['Histoire et contexte', 'Anecdotes insolites', 'Technique artistique', 'Symbolisme et interprétation']
+const TONE_OPTIONS = ['Ludique et accessible', 'Équilibré', 'Sérieux et académique']
 
 function resizeImage(file: File): Promise<Blob> {
   return new Promise((resolve, reject) => {
@@ -29,13 +35,16 @@ function resizeImage(file: File): Promise<Blob> {
 type NarrateState = 'idle' | 'loading' | 'ready' | 'playing' | 'done' | 'error'
 
 type State =
+  | { status: 'onboarding' }
   | { status: 'idle' }
   | { status: 'loading'; preview: string }
   | { status: 'result'; preview: string; data: ArtworkSummary }
   | { status: 'error'; preview: string; message: string }
 
 export default function App() {
-  const [state, setState] = useState<State>({ status: 'idle' })
+  const [state, setState] = useState<State>(() =>
+    sessionStorage.getItem(PROFILE_DONE_KEY) ? { status: 'idle' } : { status: 'onboarding' },
+  )
   const [narrateState, setNarrateState] = useState<NarrateState>('idle')
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -102,6 +111,11 @@ export default function App() {
         {/* Header */}
         <h1 style={styles.h1}>Analyse d'œuvre</h1>
 
+        {/* Onboarding */}
+        {state.status === 'onboarding' && (
+          <Onboarding onDone={() => setState({ status: 'idle' })} />
+        )}
+
         {/* Camera trigger — always visible */}
         <input
           ref={inputRef}
@@ -122,7 +136,7 @@ export default function App() {
         )}
 
         {/* Preview */}
-        {state.status !== 'idle' && (
+        {state.status !== 'idle' && state.status !== 'onboarding' && (
           <img src={state.preview} alt="photo prise" style={styles.preview} />
         )}
 
@@ -146,6 +160,103 @@ export default function App() {
         {state.status === 'result' && (
           <Result data={state.data} onReset={reset} narrateState={narrateState} onPlay={playAudio} />
         )}
+      </div>
+    </div>
+  )
+}
+
+function Onboarding({ onDone }: { onDone: () => void }) {
+  const [ageRange, setAgeRange] = useState<string | null>(null)
+  const [level, setLevel] = useState<string | null>(null)
+  const [interests, setInterests] = useState<string[]>([])
+  const [tone, setTone] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  const canSubmit = ageRange !== null && level !== null && tone !== null && !submitting
+
+  function toggleInterest(item: string) {
+    setInterests((prev) => (prev.includes(item) ? prev.filter((i) => i !== item) : [...prev, item]))
+  }
+
+  async function submit() {
+    if (!canSubmit) return
+    setSubmitting(true)
+    const profile: VisitorProfile = { age_range: ageRange!, level: level!, interests, tone: tone! }
+    try {
+      await fetch('/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile),
+      })
+    } finally {
+      sessionStorage.setItem(PROFILE_DONE_KEY, '1')
+      onDone()
+    }
+  }
+
+  return (
+    <div style={styles.resultWrap}>
+      <p style={styles.hint}>Quelques questions pour adapter le guide à toi.</p>
+      <Choice label="Ton âge" options={AGE_OPTIONS} value={ageRange} onChange={setAgeRange} />
+      <Choice label="Ton niveau en art" options={LEVEL_OPTIONS} value={level} onChange={setLevel} />
+      <MultiChoice label="Ce qui t'intéresse" options={INTEREST_OPTIONS} values={interests} onToggle={toggleInterest} />
+      <Choice label="Le ton que tu préfères" options={TONE_OPTIONS} value={tone} onChange={setTone} />
+      <button style={{ ...styles.btn, opacity: canSubmit ? 1 : 0.5 }} disabled={!canSubmit} onClick={submit}>
+        {submitting ? 'Préparation…' : 'Commencer la visite'}
+      </button>
+    </div>
+  )
+}
+
+function Choice({
+  label, options, value, onChange,
+}: {
+  label: string
+  options: string[]
+  value: string | null
+  onChange: (v: string) => void
+}) {
+  return (
+    <div style={styles.card}>
+      <div style={styles.cardLabel}>{label}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {options.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            style={{ ...styles.choice, ...(value === opt ? styles.choiceSelected : {}) }}
+            onClick={() => onChange(opt)}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function MultiChoice({
+  label, options, values, onToggle,
+}: {
+  label: string
+  options: string[]
+  values: string[]
+  onToggle: (v: string) => void
+}) {
+  return (
+    <div style={styles.card}>
+      <div style={styles.cardLabel}>{label}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {options.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            style={{ ...styles.choice, ...(values.includes(opt) ? styles.choiceSelected : {}) }}
+            onClick={() => onToggle(opt)}
+          >
+            {opt}
+          </button>
+        ))}
       </div>
     </div>
   )
@@ -351,6 +462,20 @@ const styles = {
     borderRadius: 20,
     padding: '4px 10px',
     fontSize: '.85rem',
+  },
+  choice: {
+    background: '#2a2a2a',
+    color: '#f0f0f0',
+    border: '1px solid transparent',
+    borderRadius: 20,
+    padding: '6px 12px',
+    fontSize: '.85rem',
+    cursor: 'pointer',
+  },
+  choiceSelected: {
+    background: '#fff',
+    color: '#111',
+    border: '1px solid #fff',
   },
   colorTag: {
     background: '#2a2a2a',

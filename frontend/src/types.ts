@@ -1,3 +1,10 @@
+export interface VisitorProfile {
+  age_range: string
+  level: string
+  interests: string[]
+  tone: string
+}
+
 export interface ArtworkSummary {
   titre_probable: string | null
   artiste_probable: string | null

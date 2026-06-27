@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.analyzer import analyze_artwork
 from backend.narrator import narrate
+from backend.profile import load_profile_text, save_profile
 
 load_dotenv()
 
@@ -23,12 +24,19 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+@app.post("/profile")
+async def profile_route(request: Request):
+    data = await request.json()
+    save_profile(data)
+    return JSONResponse({"ok": True})
+
+
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
     image_bytes = await file.read()
     media_type = file.content_type or "image/jpeg"
     try:
-        result = analyze_artwork(image_bytes, media_type)
+        result = analyze_artwork(image_bytes, media_type, load_profile_text())
         _save(result)
         return JSONResponse(result)
     except Exception as e:
