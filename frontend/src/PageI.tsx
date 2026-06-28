@@ -246,6 +246,7 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
 
       {state.status === 'idle' && (
         <div style={s.idleWrap}>
+          <h1 style={s.appTitle}>AletheAI</h1>
           <button style={s.cameraBtn} onClick={() => inputRef.current?.click()}>
             <svg width="28" height="24" viewBox="0 0 28 24" fill="none">
               <path d="M9.5 4.5L8 7H3a1.5 1.5 0 0 0-1.5 1.5v12A1.5 1.5 0 0 0 3 22h22a1.5 1.5 0 0 0 1.5-1.5v-12A1.5 1.5 0 0 0 25 7h-5l-1.5-2.5z" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" fill="none"/>
@@ -803,7 +804,8 @@ const s = {
   col: { width: '100%', display: 'flex', flexDirection: 'column' as const, gap: '1rem' },
   h1: { fontFamily: PLAYFAIR, fontSize: '1.6rem', fontWeight: 400, letterSpacing: '.01em', color: '#1c1812' },
 
-  idleWrap: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: '1rem', paddingTop: '1.5rem' },
+  idleWrap: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: '1rem', minHeight: '62vh' },
+  appTitle: { fontFamily: PLAYFAIR, fontStyle: 'italic' as const, fontSize: '3rem', fontWeight: 400, letterSpacing: '.01em', color: '#8a5a2b', marginBottom: '1.6rem', textShadow: '0 1px 2px rgba(138,90,43,.12)' },
   cameraBtn: {
     width: 80, height: 80, borderRadius: '50%',
     background: 'linear-gradient(135deg, #c9a84c, #a67c2a)',
