@@ -23,5 +23,8 @@
     "mountain landscape"
   ],
   "artist_id": "david",
-  "_key": "d4540b486a426028"
+  "_key": "d4540b486a426028",
+  "depicted_moment": null,
+  "narrative_context": null,
+  "scene_characters": null
 }
