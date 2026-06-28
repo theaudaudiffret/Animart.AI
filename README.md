@@ -1,354 +1,225 @@
-# Animart.ai
+# Animart.ai 🏛️
 
-AI-powered museum guide. A visitor photographs an artwork; **Claude** analyzes it and produces structured metadata. The app then offers two audio experiences — a **personalized narration** or an **immersive scene** — via **ElevenLabs**, adapted to a visitor persona. Gamification tracks artist **quests** and builds a personal **library** of scanned works.
+Guide de musée mobile : l'utilisateur **photographie une œuvre**, Claude l'analyse, puis l'app propose une **visite audio personnalisée** (narration ou scène immersive) adaptée au profil du visiteur. Quêtes par artiste et bibliothèque de session incluses.
 
-All generated text and audio is in **English**. JSON field names in the analysis schema are French (`titre_probable`, `artiste_probable`, …) — internal keys only.
-
----
-
-## Features
-
-- **Onboarding** — short questionnaire → visitor profile (demo: two personas, `serious` / `fun`, driven by tone choice)
-- **City & museum journey** — pick a city, museum, era, or featured artist before scanning (`cityData.ts`: Paris, London, Amsterdam, Madrid, Florence, New York, Rome, …)
-- **Artwork scan** — camera upload, client-side resize, Claude vision analysis
-- **Semantic dedup** — Claude agent matches new scans to existing works (e.g. *Mona Lisa* = *La Joconde*)
-- **Classic narration** — Claude writes the script, ElevenLabs speaks it (persona-aware)
-- **Immersive scene** — multi-voice theatrical audio with ambient textures, music, SFX, and word-level captions (`immersive_scene/`)
-- **Quests** — scan progress per artist at the Louvre, Orsay, and Pompidou (`PageII`, `data.ts`)
-- **Library** — session artworks grouped by museum, detail modal, audio playback (`PageBiblio`)
+Contenu généré en **anglais**. Les clés JSON d'analyse restent en français (`titre_probable`, `artiste_probable`, …).
 
 ---
 
-## Stack
+## Comment ça marche
 
-| Layer | Technology |
-|-------|------------|
-| Backend | Python 3.11+, FastAPI, Uvicorn |
-| Frontend | React 19, Vite, TypeScript |
-| Vision / text | Anthropic Claude (`analyzer`, `dedup`, `narrator`, immersive script) |
-| Audio | ElevenLabs (TTS, multi-voice dialogue, music, SFX) |
-| Images | OpenCV (resize, perceptual hash), Wikipedia API |
-| Deps | [uv](https://docs.astral.sh/uv/) + `pyproject.toml` / `uv.lock` |
-
----
-
-## Architecture
-
-### Code file graph
-
-How source files connect at runtime (arrows = imports, HTTP calls, or reads/writes):
-
-```
-                         ┌── docs/prompt.md
-                         │
-frontend/src/            │         ┌── docs/narration_prompt.md
-─────────────            │         │
-App.tsx                  │    ┌────┴──── narrator.py ──► ElevenLabs
- ├─► PageI.tsx ──────────┼───►│
- ├─► PageII.tsx ────────┼───►│         ┌── immersive_scene/pipeline.py
- └─► PageBiblio.tsx ─────┼───►├── server.py ◄── immersive.py ──┘
-        │                │    │      │
-        ├─► data.ts      │    │      ├── analyzer.py
-        ├─► cityData.ts  │    │      ├── dedup.py
-        └─► types.ts     │    │      ├── matcher.py
-                         │    │      └── profile.py ──► docs/long_term_memory.md
-                         │    │
-                         │    ├── reads/writes ──► docs/session.json
-                         │    │
-                         │    └── reads/writes ──► analyses/serious|fun/
-                         │                              ├── {key}.json
-                         │                              ├── photos/
-                         │                              ├── audio/
-                         │                              └── immersive/
-                         │
-                         └── (this README documents the graph above)
-```
-
-### System context
-
-```mermaid
-flowchart LR
-  Browser["Browser React SPA"]
-  Server["backend/server.py"]
-  Claude["Anthropic Claude"]
-  ElevenLabs["ElevenLabs"]
-  Wiki["Wikipedia API"]
-
-  Browser <-->|HTTP| Server
-  Server --> Claude
-  Server --> ElevenLabs
-  Server --> Wiki
-```
-
-### Module map
-
-```mermaid
-flowchart TB
-  subgraph FE["frontend/src"]
-    App["App.tsx"]
-    P1["PageI.tsx"]
-    P2["PageII.tsx"]
-    PB["PageBiblio.tsx"]
-    DT["data.ts"]
-    CD["cityData.ts"]
-    TP["types.ts"]
-    App --> P1
-    App --> P2
-    App --> PB
-    P1 --> DT
-    P1 --> CD
-    P1 --> TP
-    P2 --> DT
-    PB --> DT
-  end
-
-  subgraph BE["backend"]
-    SRV["server.py"]
-    AN["analyzer.py"]
-    DD["dedup.py"]
-    NR["narrator.py"]
-    IM["immersive.py"]
-    MT["matcher.py"]
-    PR["profile.py"]
-    SRV --> AN
-    SRV --> DD
-    SRV --> NR
-    SRV --> IM
-    SRV --> MT
-    SRV --> PR
-  end
-
-  subgraph IS["immersive_scene"]
-    PL["pipeline.py"]
-    PM["prompts.py"]
-    VC["voice_catalog.json"]
-    PL --> PM
-    PL --> VC
-  end
-
-  subgraph DC["docs"]
-    DP["prompt.md"]
-    DN["narration_prompt.md"]
-    SJ["session.json"]
-    LM["long_term_memory.md"]
-  end
-
-  subgraph ST["analyses per persona"]
-    JS["key.json"]
-    PH["photos/"]
-    AU["audio/"]
-    IV["immersive/"]
-  end
-
-  P1 --> SRV
-  P2 --> SRV
-  PB --> SRV
-  AN --> DP
-  NR --> DN
-  NR --> LM
-  PR --> LM
-  IM --> PL
-  SRV --> ST
-  SRV --> SJ
-  SRV --> LM
-```
-
-### Scan flow
+Diagramme de séquence UML — du scan à l'audio :
 
 ```mermaid
 sequenceDiagram
-  actor User
+  autonumber
+  actor Visiteur
   participant PageI as PageI.tsx
-  participant API as server.py
-  participant Vision as analyzer.py
+  participant Server as server.py
+  participant Analyzer as analyzer.py
   participant Dedup as dedup.py
-  participant Match as matcher.py
-  participant DB as persona DB
-  participant Session as session.json
+  participant Narrator as narrator.py
+  participant Immersive as immersive.py
+  participant Claude as Claude API
+  participant ElevenLabs as ElevenLabs API
+  participant Cache as analyses persona DB
 
-  User->>PageI: Take photo
-  PageI->>API: POST /analyze
-  API->>Vision: analyze_artwork
-  Vision-->>API: artwork JSON
-  API->>Match: match_artist
-  API->>Dedup: find_existing_artwork
-  alt persona DB hit
-    Dedup-->>API: existing key
-    API->>DB: load cached JSON
-  else new work
-    Dedup-->>API: null
-    API->>DB: save JSON and photo
+  Visiteur->>PageI: Photographier une oeuvre
+  PageI->>Server: POST /analyze
+  Server->>Analyzer: analyze_artwork()
+  Analyzer->>Claude: vision + prompt.md
+  Claude-->>Analyzer: JSON oeuvre
+  Analyzer-->>Server: metadata
+  Server->>Dedup: find_existing_artwork()
+  Dedup->>Claude: matching semantique
+  Claude-->>Dedup: key ou null
+  alt cache hit
+    Server->>Cache: charger JSON existant
+  else nouvelle oeuvre
+    Server->>Cache: sauver JSON + photo
   end
-  API->>Session: append if not in_session
-  API-->>PageI: JSON response
-  User->>PageI: Narrate or immersive
-  PageI->>API: POST /narrate or /immersive
-  API->>DB: reuse or generate audio
-  API-->>PageI: MP3 and captions
+  Server-->>PageI: artwork + from_cache + in_session
+
+  alt narration
+    Visiteur->>PageI: Ecouter narration
+    PageI->>Server: POST /narrate
+    Server->>Narrator: narrate()
+    Narrator->>Claude: script personnalise
+    Narrator->>ElevenLabs: TTS
+    Narrator->>Cache: sauver audio/
+    Server-->>PageI: MP3
+  else scene immersive
+    Visiteur->>PageI: Scene immersive
+    PageI->>Server: POST /immersive
+    Server->>Immersive: generate_immersive()
+    Immersive->>Claude: script multi-voix
+    Immersive->>ElevenLabs: dialogue + musique + SFX
+    Immersive->>Cache: sauver immersive/
+    Server-->>PageI: MP3 + captions
+  end
 ```
 
-### Data model
+Le profil visiteur (questionnaire → persona `serious` / `fun`) est stocké dans `docs/long_term_memory.md` et pilote le ton de la narration. Les œuvres scannées sont mises en cache dans `analyses/{persona}/` ; la session courante vit dans `docs/session.json`.
+
+### Diagramme de composants (UML)
+
+Relations entre packages et fichiers du dépôt :
 
 ```mermaid
-flowchart TB
-  subgraph persona_db["Persona DB shared persistent"]
-    Pserious["analyses/serious"]
-    Pfun["analyses/fun"]
-  end
+classDiagram
+  direction TB
 
-  subgraph user_session["User session reset by new-profile"]
-    Sess["docs/session.json"]
-    Ltm["docs/long_term_memory.md"]
-  end
+  class App_tsx <<component>>
+  class PageI_tsx <<component>>
+  class PageII_tsx <<component>>
+  class PageBiblio_tsx <<component>>
+  class data_ts <<component>>
+  class cityData_ts <<component>>
 
-  Scan["New scan"] --> persona_db
-  Scan --> user_session
-  persona_db -.->|from_cache| Scan
-  user_session -.->|in_session| Scan
+  class server_py <<component>>
+  class analyzer_py <<component>>
+  class dedup_py <<component>>
+  class matcher_py <<component>>
+  class profile_py <<component>>
+  class narrator_py <<component>>
+  class immersive_py <<component>>
+
+  class pipeline_py <<component>>
+  class prompts_py <<component>>
+  class voice_catalog <<component>>
+
+  class prompt_md <<artifact>>
+  class narration_md <<artifact>>
+  class longterm_md <<artifact>>
+  class session_json <<artifact>>
+  class persona_db <<database>>
+
+  class ClaudeAPI <<external>>
+  class ElevenLabsAPI <<external>>
+  class WikipediaAPI <<external>>
+
+  App_tsx --> PageI_tsx : contient
+  App_tsx --> PageII_tsx : contient
+  App_tsx --> PageBiblio_tsx : contient
+  PageI_tsx ..> data_ts : import
+  PageI_tsx ..> cityData_ts : import
+  PageII_tsx ..> data_ts : import
+  PageBiblio_tsx ..> data_ts : import
+
+  PageI_tsx ..> server_py : HTTP REST
+  PageII_tsx ..> server_py : HTTP REST
+  PageBiblio_tsx ..> server_py : HTTP REST
+
+  server_py --> analyzer_py : appelle
+  server_py --> dedup_py : appelle
+  server_py --> matcher_py : appelle
+  server_py --> profile_py : appelle
+  server_py --> narrator_py : appelle
+  server_py --> immersive_py : appelle
+  server_py --> persona_db : read write
+  server_py --> session_json : read write
+
+  analyzer_py ..> prompt_md : lit
+  analyzer_py ..> ClaudeAPI : vision
+  dedup_py ..> ClaudeAPI : dedup
+  profile_py ..> longterm_md : ecrit
+  narrator_py ..> narration_md : lit
+  narrator_py ..> longterm_md : lit
+  narrator_py ..> ClaudeAPI : script
+  narrator_py ..> ElevenLabsAPI : TTS
+  server_py ..> WikipediaAPI : photo oeuvre
+
+  immersive_py --> pipeline_py : delegue
+  pipeline_py --> prompts_py : utilise
+  pipeline_py ..> voice_catalog : casting
+  pipeline_py ..> ClaudeAPI : script scene
+  pipeline_py ..> ElevenLabsAPI : audio immersif
+  immersive_py ..> persona_db : cache MP3
+  narrator_py ..> persona_db : cache MP3
 ```
-
-| Flag | Meaning |
-|------|---------|
-| `from_cache` | Artwork JSON (and audio) reused from the persona DB |
-| `in_session` | User already scanned this work — quests/library skip it |
-
-Quest progress uses **`in_session`**, not `from_cache`: cache hits still count as new discoveries for this visitor.
 
 ---
 
-## Project layout
-
-```
-GENZ_MUSEUM/
-├── backend/
-│   ├── server.py          # FastAPI app, routes, static files
-│   ├── analyzer.py        # Claude vision → artwork JSON
-│   ├── dedup.py           # Claude dedup agent
-│   ├── narrator.py        # Claude narration → ElevenLabs TTS
-│   ├── immersive.py       # Bridge to immersive_scene
-│   ├── matcher.py         # Artist name → museum/artist id
-│   ├── profile.py         # Onboarding → persona
-│   └── main.py            # Optional CLI: analyze a single image file
-├── frontend/src/          # React UI (PageI · PageII · PageBiblio)
-├── immersive_scene/       # Immersive audio pipeline
-├── analyses/{serious,fun}/  # Persona DB (runtime, may be populated)
-├── docs/                  # Prompts + session memory
-├── pyproject.toml
-└── uv.lock
-```
-
----
-
-## Prerequisites
-
-| Requirement | Notes |
-|-------------|-------|
-| Python ≥ 3.11 | |
-| [uv](https://docs.astral.sh/uv/) | recommended |
-| Node.js | frontend build |
-| **ffmpeg** | system binary, required for immersive audio |
-| `.env` | API keys (see below) |
-
----
-
-## Quick start
-
-### 1. Clone and configure
+## Setup
 
 ```bash
-git clone https://github.com/theaudaudiffret/GENZ_MUSEUM.git
-cd GENZ_MUSEUM
+uv sync                       # installe les deps Python
+cd frontend && npm install    # deps frontend
 ```
 
-Create `.env` at the repo root:
+Crée un `.env` à la racine :
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
 ELEVENLABS_API_KEY=sk_...
 ```
 
-### 2. Install Python dependencies
+`ffmpeg` doit être installé sur la machine (audio immersif). Python ≥ 3.11.
+
+---
+
+## Lancer
 
 ```bash
-uv sync
-```
-
-### 3. Build the frontend
-
-The server serves `frontend/dist/` — rebuild after any UI change.
-
-```bash
-cd frontend
-npm install
-npm run build
+cd frontend && npm run build   # une fois, ou après chaque modif UI
 cd ..
-```
-
-### 4. Run the server
-
-```bash
 uv run python -m backend.server
 ```
 
-Uvicorn binds to **port 8000** (`0.0.0.0`) and prints a LAN URL for phone access on the same Wi‑Fi.
+Le serveur écoute sur le **port 8000** et affiche une URL LAN pour le téléphone (même Wi‑Fi).
 
-Without uv:
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-python -m backend.server
-```
-
-### 5. (Optional) Analyze one image from the CLI
+Optionnel — analyser une image en CLI :
 
 ```bash
-uv run python -m backend.main path/to/photo.jpg
+uv run python -m backend.main chemin/vers/photo.jpg
 ```
 
-### 6. (Optional) Sync ElevenLabs voices for immersive casting
+Optionnel — synchroniser le catalogue de voix ElevenLabs :
 
 ```bash
 uv run python -m immersive_scene.sync_voices
 ```
 
-See [`immersive_scene/README.md`](immersive_scene/README.md).
+---
+
+## Fichiers
+
+| Fichier / dossier | Rôle |
+|---|---|
+| `backend/server.py` | API FastAPI, routes, fichiers statiques (`frontend/dist`) |
+| `backend/analyzer.py` | Claude vision → JSON œuvre |
+| `backend/dedup.py` | Agent Claude : même œuvre ou nouvelle entrée |
+| `backend/narrator.py` | Script Claude + TTS ElevenLabs |
+| `backend/immersive.py` | Pont vers la scène immersive |
+| `backend/matcher.py` | Nom d'artiste → id musée / quête |
+| `backend/profile.py` | Questionnaire → persona |
+| `frontend/src/PageI.tsx` | Onboarding, scan, résultat audio |
+| `frontend/src/PageII.tsx` | Quêtes (Louvre, Orsay, Pompidou) |
+| `frontend/src/PageBiblio.tsx` | Bibliothèque de la session |
+| `immersive_scene/` | Pipeline audio immersif multi-voix |
+| `analyses/{serious,fun}/` | Cache partagé par persona (JSON, photos, audio) |
+| `docs/prompt.md` | Prompt d'analyse vision |
+| `docs/narration_prompt.md` | Prompt de narration |
 
 ---
 
-## API routes
+## Routes API
 
-| Method | Route | Purpose |
-|--------|-------|---------|
-| `POST` | `/profile` | Save onboarding → persona |
-| `POST` | `/new-profile` | Reset session (persona DB untouched) |
-| `POST` | `/analyze` | Upload photo → artwork JSON |
-| `POST` | `/narrate` | Cached or new narration MP3 |
-| `POST` | `/immersive` | Cached or new immersive MP3 + captions |
-| `GET` | `/library` | Session library |
-| `GET` | `/artwork/{key}` | Full artwork JSON |
-| `GET` | `/photos/{key}` | Artwork image |
-| `GET` | `/audio/{key}` | Narration MP3 |
-| `GET` | `/immersive-audio/{key}` | Immersive MP3 |
-
-Static assets from `frontend/dist/` are served at `/`.
+| Méthode | Route | Description |
+|---|---|---|
+| `POST` | `/profile` | Enregistre le profil visiteur |
+| `POST` | `/new-profile` | Reset session (cache persona intact) |
+| `POST` | `/analyze` | Photo → JSON œuvre |
+| `POST` | `/narrate` | Narration MP3 |
+| `POST` | `/immersive` | Scène immersive MP3 + sous-titres |
+| `GET` | `/library` | Bibliothèque session |
+| `GET` | `/artwork/{key}` | JSON complet d'une œuvre |
+| `GET` | `/photos/{key}` · `/audio/{key}` · `/immersive-audio/{key}` | Médias |
 
 ---
 
-## Further reading
+## À savoir
 
-| Document | Contents |
-|----------|----------|
-| [`immersive_scene/README.md`](immersive_scene/README.md) | Immersive pipeline, voices, sound design |
-| [`docs/prompt.md`](docs/prompt.md) | Vision analysis prompt |
-| [`docs/narration_prompt.md`](docs/narration_prompt.md) | Narration prompt |
-| [`CLAUDE.md`](CLAUDE.md) | Contributor / agent notes |
-
----
-
-## Gotchas
-
-- Session data survives server restarts; only `/new-profile` clears it.
-- Each scan may trigger an extra Claude dedup call once the persona DB is non-empty.
-- Wikipedia thumbnails use `httpx` with a `curl` fallback (upload.wikimedia.org blocks Python TLS).
-- Narration and immersive are separate modes — the visitor chooses one per artwork.
+- Seul `/new-profile` efface la session ; le cache `analyses/` persiste.
+- Chaque scan peut déclencher un appel Claude de dédup si le cache n'est pas vide.
+- Narration et immersif sont **deux modes distincts** — le visiteur en choisit un par œuvre.
