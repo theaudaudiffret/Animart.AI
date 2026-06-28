@@ -12,7 +12,9 @@ dependencies = [
     "python-multipart>=0.0.12",
     "python-dotenv>=1.0.0",
     "elevenlabs>=1.0.0",
+    "pydub>=0.25.1",
+    "pydantic>=2.13.4",
 ]
 
 [tool.setuptools]
-packages = ["backend"]
+packages = ["backend", "immersive_scene"]

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import type { ArtworkSummary, VisitorProfile } from './types'
+import type { ArtworkSummary, Caption, VisitorProfile } from './types'
 
 const MAX_PX = 1600
 const JPEG_QUALITY = 0.85
@@ -32,7 +32,15 @@ function resizeImage(file: File): Promise<Blob> {
   })
 }
 
+function base64ToBlob(base64: string, mimeType: string): Blob {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new Blob([bytes], { type: mimeType })
+}
+
 type NarrateState = 'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'done' | 'error'
+type AudioMode = 'narrate' | 'immersive'
 
 type State =
   | { status: 'onboarding' }
@@ -48,46 +56,76 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
     localStorage.getItem(ONBOARDED_KEY) ? { status: 'idle' } : { status: 'onboarding' },
   )
   const [narrateState, setNarrateState] = useState<NarrateState>('idle')
+  const [audioMode, setAudioMode] = useState<AudioMode | null>(null)
+  const [captions, setCaptions] = useState<Caption[]>([])
+  const [captionIndex, setCaptionIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   async function handleFile(file: File) {
     const preview = URL.createObjectURL(file)
     setState({ status: 'loading', preview })
-    const blob = await resizeImage(file)
-    const form = new FormData()
-    form.append('file', blob, 'photo.jpg')
     try {
+      const blob = await resizeImage(file)
+      const form = new FormData()
+      form.append('file', blob, 'photo.jpg')
       const res = await fetch('/analyze', { method: 'POST', body: form })
       if (!res.ok) throw new Error(`Erreur serveur (${res.status})`)
       const data: ArtworkSummary = await res.json()
       if (data.artist_id && !data.in_session) onArtistFound(data.artist_id)
-      setNarrateState('idle')
+      clearAudio()
       setState({ status: 'result', preview, data })
-      prefetchAudio(data)
     } catch (err) {
       setState({ status: 'error', preview, message: (err as Error).message })
     }
   }
 
-  async function prefetchAudio(data: ArtworkSummary) {
+  async function loadAudio(mode: AudioMode, data: ArtworkSummary) {
+    setAudioMode(mode)
     setNarrateState('loading')
+    setCaptions([])
+    setCaptionIndex(0)
     try {
-      const res = await fetch('/narrate', {
+      const res = await fetch(mode === 'narrate' ? '/narrate' : '/immersive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       })
       if (!res.ok) throw new Error()
-      const blob = await res.blob()
+
+      let blob: Blob
+      let sceneCaptions: Caption[] = []
+      if (mode === 'immersive') {
+        const body: { audio_base64: string; captions: Caption[] } = await res.json()
+        blob = base64ToBlob(body.audio_base64, 'audio/mpeg')
+        sceneCaptions = body.captions
+        setCaptions(sceneCaptions)
+      } else {
+        blob = await res.blob()
+      }
+
       const audio = new Audio(URL.createObjectURL(blob))
       audio.onended = () => setNarrateState('done')
       audio.onerror = () => setNarrateState('error')
+      audio.ontimeupdate = () => {
+        const t = audio.currentTime
+        const idx = sceneCaptions.findIndex((caption) => t >= caption.start && t < caption.end)
+        if (idx !== -1) setCaptionIndex(idx)
+      }
       audioRef.current = audio
       setNarrateState('ready')
     } catch {
       setNarrateState('error')
     }
+  }
+
+  function clearAudio() {
+    audioRef.current?.pause()
+    audioRef.current = null
+    setNarrateState('idle')
+    setAudioMode(null)
+    setCaptions([])
+    setCaptionIndex(0)
   }
 
   function toggleAudio() {
@@ -103,9 +141,7 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
   }
 
   function reset() {
-    audioRef.current?.pause()
-    audioRef.current = null
-    setNarrateState('idle')
+    clearAudio()
     setState({ status: 'idle' })
     if (inputRef.current) inputRef.current.value = ''
   }
@@ -115,6 +151,7 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
     try {
       await fetch('/new-profile', { method: 'POST' })
     } finally {
+      clearAudio()
       onNewProfile()
       localStorage.removeItem(ONBOARDED_KEY)
       setState({ status: 'onboarding' })
@@ -171,7 +208,17 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
       )}
 
       {state.status === 'result' && (
-        <Result data={state.data} onReset={reset} narrateState={narrateState} onPlay={toggleAudio} />
+        <Result
+          data={state.data}
+          onReset={reset}
+          narrateState={narrateState}
+          audioMode={audioMode}
+          onChooseAudio={(mode) => loadAudio(mode, state.data)}
+          onSwitchAudio={clearAudio}
+          onPlay={toggleAudio}
+          captions={captions}
+          captionIndex={captionIndex}
+        />
       )}
     </div>
   )
@@ -245,36 +292,92 @@ function MultiChoice({ label, options, values, onToggle }: {
   )
 }
 
-const NARRATE_LABEL: Record<string, string> = {
-  loading: 'Chargement…',
-  ready: '▷  Écouter',
-  playing: '⏸  Pause',
-  paused: '▷  Reprendre',
-  done: '↺  Réécouter',
-  error: 'Narration indisponible',
+const AUDIO_LABEL: Record<AudioMode, Record<NarrateState, string>> = {
+  narrate: {
+    idle: '',
+    loading: 'Chargement du narrateur…',
+    ready: '▷  Écouter le narrateur',
+    playing: '⏸  Pause',
+    paused: '▷  Reprendre',
+    done: '↺  Réécouter le narrateur',
+    error: 'Narration indisponible',
+  },
+  immersive: {
+    idle: '',
+    loading: 'Création de la scène…',
+    ready: '▷  Entrer dans la scène',
+    playing: '⏸  Pause',
+    paused: '▷  Reprendre',
+    done: '↺  Réécouter la scène',
+    error: 'Scène indisponible',
+  },
+}
+
+const AUDIO_MODE_LABEL: Record<AudioMode, string> = {
+  narrate: 'Narrateur',
+  immersive: 'Scène immersive',
 }
 
 const NARRATE_ACTIVE = new Set(['ready', 'playing', 'paused', 'done'])
 
-function Result({ data, onReset, narrateState, onPlay }: {
-  data: ArtworkSummary; onReset: () => void; narrateState: NarrateState; onPlay: () => void
+function Result({
+  data, onReset, narrateState, audioMode, onChooseAudio, onSwitchAudio,
+  onPlay, captions, captionIndex,
+}: {
+  data: ArtworkSummary
+  onReset: () => void
+  narrateState: NarrateState
+  audioMode: AudioMode | null
+  onChooseAudio: (mode: AudioMode) => void
+  onSwitchAudio: () => void
+  onPlay: () => void
+  captions: Caption[]
+  captionIndex: number
 }) {
   const canTap = NARRATE_ACTIVE.has(narrateState)
   return (
     <div style={s.col}>
-      {narrateState !== 'idle' && (
-        <button
-          style={{
-            ...s.audioBtn,
-            opacity: canTap ? 1 : 0.45,
-            color: canTap ? '#a67c2a' : '#1c1812',
-            borderColor: canTap ? '#c9a84c66' : '#e4ddd3',
-          }}
-          disabled={!canTap}
-          onClick={onPlay}
-        >
-          {NARRATE_LABEL[narrateState]}
-        </button>
+      {audioMode === null ? (
+        <div style={s.audioChoice}>
+          {(Object.keys(AUDIO_MODE_LABEL) as AudioMode[]).map((mode) => (
+            <button key={mode} style={s.audioBtn} onClick={() => onChooseAudio(mode)}>
+              {AUDIO_MODE_LABEL[mode]}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div style={s.audioChoice}>
+          <button
+            style={{
+              ...s.audioBtn,
+              opacity: canTap ? 1 : 0.45,
+              color: canTap ? '#a67c2a' : '#1c1812',
+              borderColor: canTap ? '#c9a84c66' : '#e4ddd3',
+            }}
+            disabled={!canTap}
+            onClick={onPlay}
+          >
+            {AUDIO_LABEL[audioMode][narrateState]}
+          </button>
+          <button
+            style={{ ...s.audioSwitchBtn, opacity: narrateState === 'loading' ? 0.2 : 0.4 }}
+            disabled={narrateState === 'loading'}
+            onClick={onSwitchAudio}
+          >
+            Changer de mode
+          </button>
+        </div>
+      )}
+      {audioMode === 'immersive' && captions.length > 0 && (
+        <Card label="Dialogue">
+          <div style={s.captionsText}>
+            {captions.map((caption, index) => (
+              <span key={`${caption.start}-${index}`} style={index === captionIndex ? s.captionActive : s.captionWord}>
+                {caption.text}{' '}
+              </span>
+            ))}
+          </div>
+        </Card>
       )}
       <Card label="Titre" value={data.titre_probable ?? '—'} large />
       <Card label="Artiste" value={data.artiste_probable ?? '—'} large />
@@ -334,7 +437,9 @@ const s = {
   cameraLabel: { fontFamily: SANS, fontSize: '.65rem', letterSpacing: '.15em', textTransform: 'uppercase' as const, color: '#1c1812', opacity: 0.45 },
   btn: { background: '#1c1812', color: '#f7f4ef', border: 'none', borderRadius: 8, padding: '.85rem 2rem', fontSize: '.88rem', fontWeight: 600, letterSpacing: '.04em', cursor: 'pointer', width: '100%', maxWidth: 320, fontFamily: SANS },
   btnSecondary: { background: 'none', color: '#1c1812', border: 'none', fontSize: '.75rem', opacity: 0.35, cursor: 'pointer', textDecoration: 'underline' as const, fontFamily: SANS },
+  audioChoice: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' },
   audioBtn: { background: '#ffffff', border: '1px solid', borderRadius: 8, padding: '.65rem 1.4rem', fontSize: '.82rem', letterSpacing: '.05em', cursor: 'pointer', width: '100%', textAlign: 'center' as const, fontFamily: SANS, transition: 'color .15s, border-color .15s', boxShadow: '0 1px 4px rgba(0,0,0,.06)' },
+  audioSwitchBtn: { background: 'none', border: 'none', color: '#1c1812', opacity: 0.4, cursor: 'pointer', fontSize: '.7rem', fontFamily: SANS, padding: 4 },
   preview: { width: '100%', borderRadius: 10, objectFit: 'cover' as const, aspectRatio: '4/3' as const, boxShadow: '0 2px 16px rgba(0,0,0,.1)' },
   spinnerWrap: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 14 },
   spinner: { width: 40, height: 40, border: '3px solid #e4ddd3', borderTopColor: '#c9a84c', borderRadius: '50%', animation: 'spin .8s linear infinite' },
@@ -345,6 +450,9 @@ const s = {
   cardLabel: { fontFamily: PLAYFAIR, fontStyle: 'italic', fontSize: '.65rem', letterSpacing: '.1em', color: '#1c1812', opacity: 0.38, marginBottom: 5 },
   cardVal: { fontSize: '.95rem', lineHeight: 1.6, fontFamily: SANS, color: '#1c1812' },
   cardLg: { fontFamily: PLAYFAIR, fontSize: '1.25rem', fontWeight: 400, lineHeight: 1.35, color: '#1c1812' },
+  captionsText: { fontSize: '.95rem', lineHeight: 1.75, fontFamily: SANS },
+  captionWord: { opacity: 0.35 },
+  captionActive: { opacity: 1, color: '#a67c2a', fontWeight: 600 },
 
   group: { display: 'flex', flexDirection: 'column' as const, gap: 10 },
   groupLabel: { fontFamily: PLAYFAIR, fontStyle: 'italic', fontSize: '.7rem', letterSpacing: '.06em', color: '#1c1812', opacity: 0.5 },

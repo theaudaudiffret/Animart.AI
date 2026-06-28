@@ -20,17 +20,17 @@ def _generate_narration_text(data: dict) -> str:
     short_mem = SHORT_TERM_MEMORY.read_text(encoding="utf-8")
     long_mem = LONG_TERM_MEMORY.read_text(encoding="utf-8") if LONG_TERM_MEMORY.exists() else ""
 
-    user_content = f"""## Analyse de l'œuvre
+    user_content = f"""## Artwork analysis
 
 ```json
 {json.dumps(data, ensure_ascii=False, indent=2)}
 ```
 
-## Mémoire court terme (visites récentes)
+## Short-term memory (recently visited artworks)
 
 {short_mem}
 
-## Mémoire long terme (profil du visiteur)
+## Long-term memory (visitor profile)
 
 {long_mem}"""
 
@@ -44,11 +44,11 @@ def _generate_narration_text(data: dict) -> str:
     return response.content[0].text.strip()
 
 
-def _update_short_term_memory(narration_text: str) -> None:
+def update_short_term_memory(narration_text: str) -> None:
     new_entry = f"## {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{narration_text}\n"
 
     content = SHORT_TERM_MEMORY.read_text(encoding="utf-8")
-    header = "# Mémoire court terme — visites récentes\n\n"
+    header = "# Short-term memory — recently visited artworks\n\n"
 
     # Découper en entrées (FIFO) : chaque section commence par "## "
     parts = content.split("\n## ")
@@ -73,6 +73,6 @@ def narrate(data: dict) -> bytes:
     )
     audio = b"".join(audio_iter)
 
-    _update_short_term_memory(narration_text)
+    update_short_term_memory(narration_text)
 
     return audio

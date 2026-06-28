@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import socket
 import urllib.parse
@@ -16,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.analyzer import analyze_artwork
 from backend.dedup import find_existing_artwork
+from backend.immersive import generate_immersive
 from backend.matcher import match_artist
 from backend.narrator import narrate
 from backend.profile import load_persona, load_profile_text, save_profile
@@ -39,6 +41,7 @@ LONG_TERM_INITIAL = "# Long-term memory\n\n_(will be filled after the welcome qu
 def _persona_dir(persona: str) -> Path:
     d = ANALYSES_DIR / persona
     (d / "audio").mkdir(parents=True, exist_ok=True)
+    (d / "immersive").mkdir(parents=True, exist_ok=True)
     (d / "photos").mkdir(parents=True, exist_ok=True)
     return d
 
@@ -158,13 +161,26 @@ async def analyze(file: UploadFile = File(...)):
         persona = load_persona()
         pdir = _persona_dir(persona)
 
-        result = analyze_artwork(image_bytes, media_type, load_profile_text())
+        result = await asyncio.to_thread(
+            analyze_artwork, image_bytes, media_type, load_profile_text()
+        )
         result["artist_id"] = match_artist(result.get("artiste_probable"))
 
-        match_key = find_existing_artwork(result, _db_entries(pdir))
+        match_key = await asyncio.to_thread(
+            find_existing_artwork, result, _db_entries(pdir)
+        )
 
         if match_key:
-            result = json.loads((pdir / f"{match_key}.json").read_text(encoding="utf-8"))
+            fresh_result = result
+            result_path = pdir / f"{match_key}.json"
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            context_fields = ("depicted_moment", "narrative_context", "scene_characters")
+            if any(field not in result for field in context_fields):
+                for field in context_fields:
+                    result[field] = fresh_result.get(field)
+                result_path.write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
             key = match_key
         else:
             key = _phash(image_bytes)
@@ -211,12 +227,40 @@ async def narrate_route(request: Request):
             if audio_file.exists():
                 return Response(content=audio_file.read_bytes(), media_type="audio/mpeg")
 
-        audio_bytes = narrate(data)
+        audio_bytes = await asyncio.to_thread(narrate, data)
 
         if key:
             (pdir / "audio" / f"{key}.mp3").write_bytes(audio_bytes)
 
         return Response(content=audio_bytes, media_type="audio/mpeg")
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/immersive")
+async def immersive_route(request: Request):
+    data = await request.json()
+    try:
+        pdir = _persona_dir(load_persona())
+        key = data.get("_key")
+        audio_file = pdir / "immersive" / f"{key}.mp3" if key else None
+        captions_file = pdir / "immersive" / f"{key}.captions.json" if key else None
+
+        if audio_file and captions_file and audio_file.exists() and captions_file.exists():
+            audio_bytes = audio_file.read_bytes()
+            captions = json.loads(captions_file.read_text(encoding="utf-8"))
+        else:
+            audio_bytes, captions = await asyncio.to_thread(generate_immersive, data)
+            if audio_file and captions_file:
+                audio_file.write_bytes(audio_bytes)
+                captions_file.write_text(
+                    json.dumps(captions, ensure_ascii=False), encoding="utf-8"
+                )
+
+        return JSONResponse({
+            "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
+            "captions": captions,
+        })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -227,13 +271,16 @@ async def library_route():
     items = []
     for e in reversed(_session()):
         key = e["key"]
+        has_narration = (pdir / "audio" / f"{key}.mp3").exists()
+        has_immersive = (pdir / "immersive" / f"{key}.mp3").exists()
         items.append({
             "phash": key,
             "titre": e.get("titre"),
             "artiste": e.get("artiste"),
             "artist_id": e.get("artist_id"),
             "has_photo": (pdir / "photos" / f"{key}.jpg").exists(),
-            "has_audio": (pdir / "audio" / f"{key}.mp3").exists(),
+            "has_audio": has_narration or has_immersive,
+            "audio_mode": "narrate" if has_narration else "immersive" if has_immersive else None,
         })
     return JSONResponse(items)
 
@@ -249,6 +296,14 @@ async def get_photo(key: str):
 @app.get("/audio/{key}")
 async def get_audio(key: str):
     f = _persona_dir(load_persona()) / "audio" / f"{key}.mp3"
+    if not f.exists():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return Response(content=f.read_bytes(), media_type="audio/mpeg")
+
+
+@app.get("/immersive-audio/{key}")
+async def get_immersive_audio(key: str):
+    f = _persona_dir(load_persona()) / "immersive" / f"{key}.mp3"
     if not f.exists():
         return JSONResponse({"error": "not found"}, status_code=404)
     return Response(content=f.read_bytes(), media_type="audio/mpeg")

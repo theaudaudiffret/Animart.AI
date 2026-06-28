@@ -8,6 +8,7 @@ interface LibraryItem {
   artist_id: string | null
   has_photo: boolean
   has_audio: boolean
+  audio_mode: 'narrate' | 'immersive' | null
 }
 
 export default function PageBiblio() {
@@ -25,16 +26,17 @@ export default function PageBiblio() {
       .finally(() => setLoading(false))
   }, [])
 
-  function handlePlay(phash: string) {
-    if (playingPhash === phash) {
+  function handlePlay(item: LibraryItem) {
+    if (playingPhash === item.phash) {
       audioRef.current?.pause()
       setPlayingPhash(null)
       return
     }
     audioRef.current?.pause()
-    setPlayingPhash(phash)
+    setPlayingPhash(item.phash)
     setIsLoadingAudio(true)
-    const audio = new Audio(`/audio/${phash}`)
+    const endpoint = item.audio_mode === 'immersive' ? '/immersive-audio' : '/audio'
+    const audio = new Audio(`${endpoint}/${item.phash}`)
     audioRef.current = audio
     audio.oncanplaythrough = () => setIsLoadingAudio(false)
     audio.onended = () => setPlayingPhash(null)
@@ -129,7 +131,7 @@ function ArtworkRow({ item, active, isLoadingAudio, accentColor, onPlay }: {
   active: boolean
   isLoadingAudio: boolean
   accentColor: string
-  onPlay: (phash: string) => void
+  onPlay: (item: LibraryItem) => void
 }) {
   return (
     <div style={{ ...s.item, borderColor: active ? accentColor + '66' : '#e8e2d8' }}>
@@ -149,7 +151,7 @@ function ArtworkRow({ item, active, isLoadingAudio, accentColor, onPlay }: {
             background: active ? accentColor : 'transparent',
             border: active ? 'none' : '1px solid #e4ddd3',
           }}
-          onClick={() => onPlay(item.phash)}
+          onClick={() => onPlay(item)}
         >
           <span style={{ color: active ? '#fff' : '#1c1812', fontSize: '.8rem', opacity: active ? 1 : 0.6 }}>
             {active && isLoadingAudio ? '…' : active ? '⏸' : '▷'}
