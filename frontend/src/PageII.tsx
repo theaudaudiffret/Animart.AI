@@ -44,7 +44,7 @@ export default function PageII() {
   return (
     <div style={s.page}>
       <h1 style={s.h1}>Collection</h1>
-      <p style={s.sub}>Scanne des œuvres pour débloquer les artistes</p>
+      <p style={s.sub}>Scan artworks to unlock artists</p>
 
       <div style={s.museumList}>
         {MUSEUMS.map((m, i) => {
@@ -80,8 +80,8 @@ export default function PageII() {
                 <div style={s.museumTheme}>{m.theme}</div>
                 <div style={s.museumStats}>
                   {unlockedCount > 0
-                    ? `${unlockedCount}/${m.artists.length} artistes · ${totalScans} scan${totalScans !== 1 ? 's' : ''}`
-                    : `${m.artists.length} artistes à découvrir`}
+                    ? `${unlockedCount}/${m.artists.length} artists · ${totalScans} scan${totalScans !== 1 ? 's' : ''}`
+                    : `${m.artists.length} artists to discover`}
                 </div>
               </button>
             </div>
@@ -104,7 +104,7 @@ function MuseumDetail({ museum, scans, onBack }: {
 
   return (
     <div style={s.page}>
-      <button style={s.back} onClick={onBack}>↩ Retour</button>
+      <button style={s.back} onClick={onBack}>↩ Back</button>
 
       <div>
         <h2 style={{ ...s.h1, color: museum.color }}>{museum.name}</h2>
@@ -116,8 +116,8 @@ function MuseumDetail({ museum, scans, onBack }: {
           <div style={{ ...s.progressFill, width: `${prog * 100}%`, background: museum.color }} />
         </div>
         <div style={s.progressMeta}>
-          <span style={{ color: museum.color }}>{Math.round(prog * 100)}% exploré</span>
-          <span style={s.progressSub}>{unlockedCount}/{museum.artists.length} artistes débloqués</span>
+          <span style={{ color: museum.color }}>{Math.round(prog * 100)}% explored</span>
+          <span style={s.progressSub}>{unlockedCount}/{museum.artists.length} artists unlocked</span>
         </div>
       </div>
 

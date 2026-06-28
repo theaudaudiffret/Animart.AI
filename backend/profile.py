@@ -19,8 +19,12 @@ PERSONAS = {
         "\n"
         "Persona: fun\n"
         "\n"
-        "The visitor prefers a playful, accessible tone. Favor surprising anecdotes, "
-        "fun comparisons and a lively, light narration.\n"
+        "The visitor prefers a playful, punchy tone. Open with a catchy hook that grabs "
+        "attention from the very first sentence. Build the narration around surprising, "
+        "juicy anecdotes and little-known stories about the work or the artist — gossip, "
+        "scandals, hidden details, behind-the-scenes facts. Use vivid, modern comparisons "
+        "and keep the energy high and lively throughout. Prioritize being memorable and "
+        "entertaining over being exhaustive.\n"
     ),
 }
 

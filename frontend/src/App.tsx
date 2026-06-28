@@ -60,7 +60,7 @@ export default function App() {
       {toast && (
         <div style={{ ...s.toast, borderColor: toast.color }}>
           <span style={{ color: toast.color, fontFamily: "'Playfair Display', Georgia, serif", fontStyle: 'italic', fontSize: '.82rem' }}>
-            {toast.isNew ? '◆ Découverte' : '↑ Progression'}
+            {toast.isNew ? '◆ Discovery' : '↑ Progress'}
           </span>
           <div style={s.toastText}>
             <span style={{ fontWeight: 600, color: '#1c1812' }}>{toast.artistName}</span>
@@ -73,8 +73,8 @@ export default function App() {
       )}
 
       <nav style={s.tabBar}>
-        <TabBtn glyph="⊙" label="Scanner" active={tab === 'camera'} onClick={() => setTab('camera')} />
-        <TabBtn glyph="◫" label="Bibliothèque" active={tab === 'library'} onClick={() => setTab('library')} />
+        <TabBtn glyph="⊙" label="Scan" active={tab === 'camera'} onClick={() => setTab('camera')} />
+        <TabBtn glyph="◫" label="Library" active={tab === 'library'} onClick={() => setTab('library')} />
         <TabBtn glyph="◈" label="Collection" active={tab === 'achievements'} onClick={() => setTab('achievements')} />
       </nav>
     </div>

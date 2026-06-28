@@ -1,0 +1,26 @@
+{
+  "titre_probable": "Mona Lisa (La Gioconda / La Joconde)",
+  "artiste_probable": "Leonardo da Vinci",
+  "style": "High Renaissance",
+  "epoque": "c. 1503–1519, Italian Renaissance",
+  "technique": "Oil on poplar panel",
+  "description": "The image is a photograph of a computer screen displaying Google search results for 'la joconde', showing multiple reproductions of Leonardo da Vinci's celebrated portrait. The central and clearest reproduction depicts a half-length seated woman positioned in three-quarter view, her hands gently folded one over the other in the foreground, establishing the pyramidal compositional structure that became a touchstone of Renaissance portraiture. Her enigmatic, restrained smile—achieved through Leonardo's mastery of sfumato, the subtle gradation of tone that softens contours—remains the work's defining feature. She is set before a receding, atmospheric landscape of winding paths, a distant bridge, mountainous forms and meandering waterways, rendered with aerial perspective that dissolves into a bluish haze at the horizon. The framed version at right reproduces the original panel as exhibited at the Louvre within an ornate gilded frame. The surrounding interface shows commercial listings (Maisons du Monde, Amazon.fr, Boutique du Louvre) and Wikipedia citations, underscoring the painting's saturation in contemporary visual and commercial culture.",
+  "couleurs_dominantes": [
+    "ochre",
+    "golden brown",
+    "olive green",
+    "blue-grey",
+    "dark umber",
+    "amber"
+  ],
+  "ambiance": "Contemplative and serene, marked by a quiet psychological intimacy. The original work conveys timeless poise and ambiguity, though here the image is recontextualized within the banal, mass-reproduced sphere of online image searches, an ironic juxtaposition between an icon of art-historical singularity and its infinite digital replication.",
+  "sujets": [
+    "portrait",
+    "female figure",
+    "landscape background",
+    "Renaissance humanism",
+    "iconic reproduction"
+  ],
+  "artist_id": "leonard-de-vinci",
+  "_key": "86c0e824402000d8"
+}

@@ -27,11 +27,9 @@ ROOT = Path(__file__).parent.parent
 ANALYSES_DIR = ROOT / "analyses"
 ANALYSES_DIR.mkdir(exist_ok=True)
 
-SHORT_TERM_MEMORY = ROOT / "docs" / "short_term_memory.md"
 LONG_TERM_MEMORY = ROOT / "docs" / "long_term_memory.md"
 SESSION_FILE = ROOT / "docs" / "session.json"
 
-SHORT_TERM_INITIAL = "# Short-term memory — recent visits\n\n_(empty — analyzed works will appear here during the visit)_\n"
 LONG_TERM_INITIAL = "# Long-term memory\n\n_(will be filled after the welcome questionnaire)_\n"
 
 
@@ -82,7 +80,6 @@ def _session_add(entry: dict) -> None:
 
 def _reset_session_and_memories() -> None:
     SESSION_FILE.write_text("[]", encoding="utf-8")
-    SHORT_TERM_MEMORY.write_text(SHORT_TERM_INITIAL, encoding="utf-8")
     LONG_TERM_MEMORY.write_text(LONG_TERM_INITIAL, encoding="utf-8")
 
 
@@ -100,22 +97,32 @@ async def _fetch_artwork_image(titre: str | None, artiste: str | None) -> bytes 
     thumb_url: str | None = None
     try:
         async with httpx.AsyncClient(headers={"User-Agent": _WIKI_UA}, timeout=8, follow_redirects=True) as client:
+            # Wikipedia rate-limits (429) bursts of requests; retry with backoff.
+            async def wiki_get(url, params=None):
+                for delay in (0, 0.5, 1.5):
+                    if delay:
+                        await asyncio.sleep(delay)
+                    r = await client.get(url, params=params)
+                    if r.status_code != 429:
+                        return r
+                return r
+
             # Try REST summary first
             slug = titre.replace(" ", "_")
-            r = await client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}")
+            r = await wiki_get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}")
             if r.status_code == 200:
                 thumb_url = (r.json().get("thumbnail") or {}).get("source")
 
             # Fallback: search API + pageimages
             if not thumb_url:
                 query = f"{titre} {artiste or ''}".strip()
-                r = await client.get("https://en.wikipedia.org/w/api.php", params={
+                r = await wiki_get("https://en.wikipedia.org/w/api.php", params={
                     "action": "query", "list": "search",
                     "srsearch": query, "format": "json", "srlimit": 1,
                 })
                 results = r.json().get("query", {}).get("search", [])
                 if results:
-                    r = await client.get("https://en.wikipedia.org/w/api.php", params={
+                    r = await wiki_get("https://en.wikipedia.org/w/api.php", params={
                         "action": "query", "titles": results[0]["title"],
                         "prop": "pageimages", "format": "json", "pithumbsize": 800,
                     })

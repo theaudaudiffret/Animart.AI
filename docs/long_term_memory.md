@@ -1,5 +1,3 @@
-# Long-term memory — Visitor profile
+# Long-term memory
 
-Persona: fun
-
-The visitor prefers a playful, accessible tone. Favor surprising anecdotes, fun comparisons and a lively, light narration.
+_(will be filled after the welcome questionnaire)_

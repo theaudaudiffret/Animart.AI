@@ -5,10 +5,10 @@ const MAX_PX = 1600
 const JPEG_QUALITY = 0.85
 const ONBOARDED_KEY = 'genz-museum-onboarded'
 
-const AGE_OPTIONS = ['Enfant (-12 ans)', 'Ado (12-17 ans)', 'Adulte (18-64 ans)', 'Senior (65 ans et +)']
+const AGE_OPTIONS = ['Child (under 12)', 'Teen (12-17)', 'Adult (18-64)', 'Senior (65+)']
 const LEVEL_OPTIONS = ['Novice', 'Amateur', 'Expert']
-const INTEREST_OPTIONS = ['Histoire et contexte', 'Anecdotes insolites', 'Technique artistique', 'Symbolisme et interprétation']
-const TONE_OPTIONS = ['Ludique', 'Sérieux']
+const INTEREST_OPTIONS = ['History & context', 'Unusual anecdotes', 'Artistic technique', 'Symbolism & interpretation']
+const TONE_OPTIONS = ['Playful', 'Serious']
 
 function resizeImage(file: File): Promise<Blob> {
   return new Promise((resolve, reject) => {
@@ -22,7 +22,7 @@ function resizeImage(file: File): Promise<Blob> {
       canvas.height = h
       canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
       canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new Error('Canvas vide'))),
+        (blob) => (blob ? resolve(blob) : reject(new Error('Empty canvas'))),
         'image/jpeg',
         JPEG_QUALITY,
       )
@@ -39,7 +39,7 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType })
 }
 
-type NarrateState = 'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'done' | 'error'
+type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type AudioMode = 'narrate' | 'immersive'
 
 type State =
@@ -55,12 +55,16 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
   const [state, setState] = useState<State>(() =>
     localStorage.getItem(ONBOARDED_KEY) ? { status: 'idle' } : { status: 'onboarding' },
   )
-  const [narrateState, setNarrateState] = useState<NarrateState>('idle')
-  const [audioMode, setAudioMode] = useState<AudioMode | null>(null)
+  const [narrLoad, setNarrLoad] = useState<LoadState>('idle')
+  const [immLoad, setImmLoad] = useState<LoadState>('idle')
+  const [playing, setPlaying] = useState<AudioMode | null>(null)
+  const [narrProgress, setNarrProgress] = useState({ cur: 0, dur: 0 })
+  const [immProgress, setImmProgress] = useState({ cur: 0, dur: 0 })
   const [captions, setCaptions] = useState<Caption[]>([])
   const [captionIndex, setCaptionIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const narrRef = useRef<HTMLAudioElement | null>(null)
+  const immRef = useRef<HTMLAudioElement | null>(null)
 
   async function handleFile(file: File) {
     const preview = URL.createObjectURL(file)
@@ -75,16 +79,24 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
       if (data.artist_id && !data.in_session) onArtistFound(data.artist_id)
       clearAudio()
       setState({ status: 'result', preview, data })
+      loadAudio('narrate', data)
     } catch (err) {
       setState({ status: 'error', preview, message: (err as Error).message })
     }
   }
 
+  function refFor(mode: AudioMode) {
+    return mode === 'narrate' ? narrRef : immRef
+  }
+
+  function setProgressFor(mode: AudioMode) {
+    return mode === 'narrate' ? setNarrProgress : setImmProgress
+  }
+
   async function loadAudio(mode: AudioMode, data: ArtworkSummary) {
-    setAudioMode(mode)
-    setNarrateState('loading')
-    setCaptions([])
-    setCaptionIndex(0)
+    const setLoad = mode === 'narrate' ? setNarrLoad : setImmLoad
+    const setProgress = setProgressFor(mode)
+    setLoad('loading')
     try {
       const res = await fetch(mode === 'narrate' ? '/narrate' : '/immersive', {
         method: 'POST',
@@ -105,39 +117,82 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
       }
 
       const audio = new Audio(URL.createObjectURL(blob))
-      audio.onended = () => setNarrateState('done')
-      audio.onerror = () => setNarrateState('error')
-      audio.ontimeupdate = () => {
-        const t = audio.currentTime
-        const idx = sceneCaptions.findIndex((caption) => t >= caption.start && t < caption.end)
-        if (idx !== -1) setCaptionIndex(idx)
+      audio.onended = () => {
+        setPlaying(null)
+        setProgress((p) => ({ ...p, cur: p.dur }))
       }
-      audioRef.current = audio
-      setNarrateState('ready')
+      audio.onerror = () => setLoad('error')
+      audio.ontimeupdate = () => {
+        setProgress({ cur: audio.currentTime, dur: audio.duration || 0 })
+        if (mode === 'immersive') {
+          const t = audio.currentTime
+          const idx = sceneCaptions.findIndex((caption) => t >= caption.start && t < caption.end)
+          if (idx !== -1) setCaptionIndex(idx)
+        }
+      }
+      refFor(mode).current = audio
+      setLoad('ready')
     } catch {
-      setNarrateState('error')
+      setLoad('error')
     }
+  }
+
+  // Only one audio plays at a time: starting one always pauses the other.
+  function play(mode: AudioMode) {
+    const other = mode === 'narrate' ? immRef : narrRef
+    other.current?.pause()
+    const audio = refFor(mode).current
+    if (!audio) return
+    if (audio.ended) audio.currentTime = 0
+    audio.play()
+    setPlaying(mode)
+  }
+
+  function toggle(mode: AudioMode) {
+    if (playing === mode) {
+      refFor(mode).current?.pause()
+      setPlaying(null)
+    } else {
+      play(mode)
+    }
+  }
+
+  // Manual trigger: pause the narrator, load the immersive scene, then play it.
+  async function startImmersive(data: ArtworkSummary) {
+    narrRef.current?.pause()
+    setPlaying(null)
+    await loadAudio('immersive', data)
+    play('immersive')
+  }
+
+  function restart(mode: AudioMode) {
+    const audio = refFor(mode).current
+    if (!audio) return
+    audio.currentTime = 0
+    setProgressFor(mode)((p) => ({ ...p, cur: 0 }))
+    play(mode)
+  }
+
+  function seek(mode: AudioMode, fraction: number) {
+    const audio = refFor(mode).current
+    if (!audio || !audio.duration) return
+    const cur = fraction * audio.duration
+    audio.currentTime = cur
+    setProgressFor(mode)({ cur, dur: audio.duration })
   }
 
   function clearAudio() {
-    audioRef.current?.pause()
-    audioRef.current = null
-    setNarrateState('idle')
-    setAudioMode(null)
+    narrRef.current?.pause()
+    immRef.current?.pause()
+    narrRef.current = null
+    immRef.current = null
+    setNarrLoad('idle')
+    setImmLoad('idle')
+    setPlaying(null)
+    setNarrProgress({ cur: 0, dur: 0 })
+    setImmProgress({ cur: 0, dur: 0 })
     setCaptions([])
     setCaptionIndex(0)
-  }
-
-  function toggleAudio() {
-    if (!audioRef.current) return
-    if (narrateState === 'playing') {
-      audioRef.current.pause()
-      setNarrateState('paused')
-    } else {
-      if (narrateState === 'done') audioRef.current.currentTime = 0
-      audioRef.current.play()
-      setNarrateState('playing')
-    }
   }
 
   function reset() {
@@ -147,7 +202,7 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
   }
 
   async function newProfile() {
-    if (!confirm('Archiver la visite actuelle et créer un nouveau profil ?')) return
+    if (!confirm('Archive the current visit and create a new profile?')) return
     try {
       await fetch('/new-profile', { method: 'POST' })
     } finally {
@@ -160,7 +215,7 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
 
   return (
     <div style={{ ...s.page, display: hidden ? 'none' : 'flex' }}>
-      <h1 style={s.h1}>Scanner une œuvre</h1>
+      <h1 style={s.h1}>Scan an artwork</h1>
 
       {state.status === 'onboarding' && (
         <Onboarding onDone={() => { localStorage.setItem(ONBOARDED_KEY, '1'); setState({ status: 'idle' }) }} />
@@ -184,8 +239,8 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
               <circle cx="22.5" cy="9.5" r="1" fill="#fff"/>
             </svg>
           </button>
-          <span style={s.cameraLabel}>Photographier</span>
-          <button style={s.btnSecondary} onClick={newProfile}>Nouveau profil</button>
+          <span style={s.cameraLabel}>Take a photo</span>
+          <button style={s.btnSecondary} onClick={newProfile}>New profile</button>
         </div>
       )}
 
@@ -196,14 +251,14 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
       {state.status === 'loading' && (
         <div style={s.spinnerWrap}>
           <div style={s.spinner} />
-          <span style={s.dim}>Analyse en cours…</span>
+          <span style={s.dim}>Analyzing…</span>
         </div>
       )}
 
       {state.status === 'error' && (
         <>
           <p style={s.error}>{state.message}</p>
-          <button style={s.btn} onClick={reset}>Réessayer</button>
+          <button style={s.btn} onClick={reset}>Try again</button>
         </>
       )}
 
@@ -211,11 +266,15 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
         <Result
           data={state.data}
           onReset={reset}
-          narrateState={narrateState}
-          audioMode={audioMode}
-          onChooseAudio={(mode) => loadAudio(mode, state.data)}
-          onSwitchAudio={clearAudio}
-          onPlay={toggleAudio}
+          narrLoad={narrLoad}
+          immLoad={immLoad}
+          playing={playing}
+          narrProgress={narrProgress}
+          immProgress={immProgress}
+          onToggle={toggle}
+          onRestart={restart}
+          onSeek={seek}
+          onImmersiveLoad={() => startImmersive(state.data)}
           captions={captions}
           captionIndex={captionIndex}
         />
@@ -245,14 +304,14 @@ function Onboarding({ onDone }: { onDone: () => void }) {
 
   return (
     <div style={s.col}>
-      <p style={s.dim}>Quelques questions pour adapter le guide à toi.</p>
-      <Choice label="Ton âge" options={AGE_OPTIONS} value={ageRange} onChange={setAgeRange} />
-      <Choice label="Ton niveau en art" options={LEVEL_OPTIONS} value={level} onChange={setLevel} />
-      <MultiChoice label="Ce qui t'intéresse" options={INTEREST_OPTIONS} values={interests}
+      <p style={s.dim}>A few questions to tailor the guide to you.</p>
+      <Choice label="Your age" options={AGE_OPTIONS} value={ageRange} onChange={setAgeRange} />
+      <Choice label="Your art level" options={LEVEL_OPTIONS} value={level} onChange={setLevel} />
+      <MultiChoice label="What interests you" options={INTEREST_OPTIONS} values={interests}
         onToggle={(i) => setInterests((p) => p.includes(i) ? p.filter((x) => x !== i) : [...p, i])} />
-      <Choice label="Le ton que tu préfères" options={TONE_OPTIONS} value={tone} onChange={setTone} />
+      <Choice label="Your preferred tone" options={TONE_OPTIONS} value={tone} onChange={setTone} />
       <button style={{ ...s.submitBtn, opacity: canSubmit ? 1 : 0.45 }} disabled={!canSubmit} onClick={submit}>
-        {submitting ? 'Préparation…' : 'Commencer la visite'}
+        {submitting ? 'Preparing…' : 'Start the visit'}
       </button>
     </div>
   )
@@ -292,83 +351,166 @@ function MultiChoice({ label, options, values, onToggle }: {
   )
 }
 
-const AUDIO_LABEL: Record<AudioMode, Record<NarrateState, string>> = {
-  narrate: {
-    idle: '',
-    loading: 'Chargement du narrateur…',
-    ready: '▷  Écouter le narrateur',
-    playing: '⏸  Pause',
-    paused: '▷  Reprendre',
-    done: '↺  Réécouter le narrateur',
-    error: 'Narration indisponible',
-  },
-  immersive: {
-    idle: '',
-    loading: 'Création de la scène…',
-    ready: '▷  Entrer dans la scène',
-    playing: '⏸  Pause',
-    paused: '▷  Reprendre',
-    done: '↺  Réécouter la scène',
-    error: 'Scène indisponible',
-  },
+const AUDIO_COLOR: Record<AudioMode, string> = {
+  narrate: '#2563eb',   // blue
+  immersive: '#ea580c', // orange
 }
 
-const AUDIO_MODE_LABEL: Record<AudioMode, string> = {
-  narrate: 'Narrateur',
-  immersive: 'Scène immersive',
+function fmtTime(sec: number): string {
+  if (!isFinite(sec) || sec < 0) sec = 0
+  const m = Math.floor(sec / 60)
+  const r = Math.floor(sec % 60)
+  return `${m}:${r.toString().padStart(2, '0')}`
 }
 
-const NARRATE_ACTIVE = new Set(['ready', 'playing', 'paused', 'done'])
+function Scrubber({ frac, onSeek }: { frac: number; onSeek: (fraction: number) => void }) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const seeking = useRef(false)
+  function fractionAt(clientX: number) {
+    const el = trackRef.current
+    if (!el) return 0
+    const r = el.getBoundingClientRect()
+    return Math.min(1, Math.max(0, (clientX - r.left) / r.width))
+  }
+  return (
+    <div
+      ref={trackRef}
+      style={s.scrubTrack}
+      onPointerDown={(e) => { seeking.current = true; e.currentTarget.setPointerCapture(e.pointerId); onSeek(fractionAt(e.clientX)) }}
+      onPointerMove={(e) => { if (seeking.current) onSeek(fractionAt(e.clientX)) }}
+      onPointerUp={(e) => { seeking.current = false; e.currentTarget.releasePointerCapture(e.pointerId) }}
+    >
+      <div style={{ ...s.scrubFill, width: `${frac * 100}%` }} />
+      <div style={{ ...s.scrubKnob, left: `${frac * 100}%` }} />
+    </div>
+  )
+}
+
+// WhatsApp-style player row — play/pause, seek bar, time, restart.
+function PlayerRow({ num, color, playing, cur, dur, onToggle, onRestart, onSeek }: {
+  num: number
+  color: string
+  playing: boolean
+  cur: number
+  dur: number
+  onToggle: () => void
+  onRestart: () => void
+  onSeek: (fraction: number) => void
+}) {
+  const frac = dur ? cur / dur : 0
+  return (
+    <div style={{ ...s.playerRow, background: color }}>
+      <span style={s.audioBtnNum}>{num}</span>
+      <button style={s.playerIcon} onClick={onToggle}>{playing ? '⏸' : '▶'}</button>
+      <Scrubber frac={frac} onSeek={onSeek} />
+      <span style={s.playerTime}>{fmtTime(cur)}</span>
+      <button style={s.playerIcon} onClick={onRestart} title="Restart">↺</button>
+    </div>
+  )
+}
+
+// Button 1 (blue): the narrator player, or a disabled label while loading.
+function NarratorPlayer({ load, playing, cur, dur, onToggle, onRestart, onSeek }: {
+  load: LoadState
+  playing: boolean
+  cur: number
+  dur: number
+  onToggle: () => void
+  onRestart: () => void
+  onSeek: (fraction: number) => void
+}) {
+  if (load !== 'ready') {
+    const label = load === 'loading' ? 'Loading narrator…'
+      : load === 'error' ? 'Narration unavailable' : 'Narrator'
+    return (
+      <div style={{ ...s.audioBtn, background: AUDIO_COLOR.narrate, opacity: 0.55, cursor: 'default' }}>
+        <span style={s.audioBtnNum}>1</span>{label}
+      </div>
+    )
+  }
+  return (
+    <PlayerRow num={1} color={AUDIO_COLOR.narrate} playing={playing} cur={cur} dur={dur}
+      onToggle={onToggle} onRestart={onRestart} onSeek={onSeek} />
+  )
+}
+
+// Button 2 (orange): unlocks once the narrator is ready; tapping it loads the
+// scene (if needed) and plays it. Once loaded it becomes a full player.
+function ImmersivePlayer({ load, narrReady, playing, cur, dur, onToggle, onRestart, onSeek, onLoad }: {
+  load: LoadState
+  narrReady: boolean
+  playing: boolean
+  cur: number
+  dur: number
+  onToggle: () => void
+  onRestart: () => void
+  onSeek: (fraction: number) => void
+  onLoad: () => void
+}) {
+  if (load === 'ready') {
+    return (
+      <PlayerRow num={2} color={AUDIO_COLOR.immersive} playing={playing} cur={cur} dur={dur}
+        onToggle={onToggle} onRestart={onRestart} onSeek={onSeek} />
+    )
+  }
+  const enabled = (load === 'idle' || load === 'error') && narrReady
+  const label = load === 'loading' ? 'Creating the scene…'
+    : load === 'error' ? 'Scene unavailable' : 'Immersive scene'
+  return (
+    <button
+      style={{ ...s.audioBtn, background: AUDIO_COLOR.immersive, opacity: enabled ? 1 : 0.55, cursor: enabled ? 'pointer' : 'default' }}
+      disabled={!enabled}
+      onClick={enabled ? onLoad : undefined}
+    >
+      <span style={s.audioBtnNum}>2</span>
+      {label}
+    </button>
+  )
+}
 
 function Result({
-  data, onReset, narrateState, audioMode, onChooseAudio, onSwitchAudio,
-  onPlay, captions, captionIndex,
+  data, onReset, narrLoad, immLoad, playing, narrProgress, immProgress, onToggle, onRestart, onSeek, onImmersiveLoad,
+  captions, captionIndex,
 }: {
   data: ArtworkSummary
   onReset: () => void
-  narrateState: NarrateState
-  audioMode: AudioMode | null
-  onChooseAudio: (mode: AudioMode) => void
-  onSwitchAudio: () => void
-  onPlay: () => void
+  narrLoad: LoadState
+  immLoad: LoadState
+  playing: AudioMode | null
+  narrProgress: { cur: number; dur: number }
+  immProgress: { cur: number; dur: number }
+  onToggle: (mode: AudioMode) => void
+  onRestart: (mode: AudioMode) => void
+  onSeek: (mode: AudioMode, fraction: number) => void
+  onImmersiveLoad: () => void
   captions: Caption[]
   captionIndex: number
 }) {
-  const canTap = NARRATE_ACTIVE.has(narrateState)
   return (
     <div style={s.col}>
-      {audioMode === null ? (
-        <div style={s.audioChoice}>
-          {(Object.keys(AUDIO_MODE_LABEL) as AudioMode[]).map((mode) => (
-            <button key={mode} style={s.audioBtn} onClick={() => onChooseAudio(mode)}>
-              {AUDIO_MODE_LABEL[mode]}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div style={s.audioChoice}>
-          <button
-            style={{
-              ...s.audioBtn,
-              opacity: canTap ? 1 : 0.45,
-              color: canTap ? '#a67c2a' : '#1c1812',
-              borderColor: canTap ? '#c9a84c66' : '#e4ddd3',
-            }}
-            disabled={!canTap}
-            onClick={onPlay}
-          >
-            {AUDIO_LABEL[audioMode][narrateState]}
-          </button>
-          <button
-            style={{ ...s.audioSwitchBtn, opacity: narrateState === 'loading' ? 0.2 : 0.4 }}
-            disabled={narrateState === 'loading'}
-            onClick={onSwitchAudio}
-          >
-            Changer de mode
-          </button>
-        </div>
-      )}
-      {audioMode === 'immersive' && captions.length > 0 && (
+      <div style={s.audioChoice}>
+        <NarratorPlayer
+          load={narrLoad}
+          playing={playing === 'narrate'}
+          cur={narrProgress.cur}
+          dur={narrProgress.dur}
+          onToggle={() => onToggle('narrate')}
+          onRestart={() => onRestart('narrate')}
+          onSeek={(f) => onSeek('narrate', f)}
+        />
+        <ImmersivePlayer
+          load={immLoad}
+          narrReady={narrLoad === 'ready'}
+          playing={playing === 'immersive'}
+          cur={immProgress.cur}
+          dur={immProgress.dur}
+          onToggle={() => onToggle('immersive')}
+          onRestart={() => onRestart('immersive')}
+          onSeek={(f) => onSeek('immersive', f)}
+          onLoad={onImmersiveLoad}
+        />
+      </div>
+      {captions.length > 0 && (
         <Card label="Dialogue">
           <div style={s.captionsText}>
             {captions.map((caption, index) => (
@@ -379,22 +521,22 @@ function Result({
           </div>
         </Card>
       )}
-      <Card label="Titre" value={data.titre_probable ?? '—'} large />
-      <Card label="Artiste" value={data.artiste_probable ?? '—'} large />
+      <Card label="Title" value={data.titre_probable ?? '—'} large />
+      <Card label="Artist" value={data.artiste_probable ?? '—'} large />
       <Card label="Style" value={data.style} />
-      {data.epoque && <Card label="Époque" value={data.epoque} />}
+      {data.epoque && <Card label="Period" value={data.epoque} />}
       {data.technique && <Card label="Technique" value={data.technique} />}
       <Card label="Description" value={data.description} />
-      <Card label="Ambiance" value={data.ambiance} />
-      <Card label="Sujets"><Chips items={data.sujets} /></Card>
-      <Card label="Couleurs dominantes">
+      <Card label="Mood" value={data.ambiance} />
+      <Card label="Subjects"><Chips items={data.sujets} /></Card>
+      <Card label="Dominant colors">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingTop: 2 }}>
           {data.couleurs_dominantes.map((c) => (
             <span key={c} style={{ ...s.dot, background: c.toLowerCase(), border: '1px solid rgba(0,0,0,.1)' }} />
           ))}
         </div>
       </Card>
-      <button style={{ ...s.btn, marginTop: 4 }} onClick={onReset}>Nouvelle photo</button>
+      <button style={{ ...s.btn, marginTop: 4 }} onClick={onReset}>New photo</button>
     </div>
   )
 }
@@ -438,8 +580,14 @@ const s = {
   btn: { background: '#1c1812', color: '#f7f4ef', border: 'none', borderRadius: 8, padding: '.85rem 2rem', fontSize: '.88rem', fontWeight: 600, letterSpacing: '.04em', cursor: 'pointer', width: '100%', maxWidth: 320, fontFamily: SANS },
   btnSecondary: { background: 'none', color: '#1c1812', border: 'none', fontSize: '.75rem', opacity: 0.35, cursor: 'pointer', textDecoration: 'underline' as const, fontFamily: SANS },
   audioChoice: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' },
-  audioBtn: { background: '#ffffff', border: '1px solid', borderRadius: 8, padding: '.65rem 1.4rem', fontSize: '.82rem', letterSpacing: '.05em', cursor: 'pointer', width: '100%', textAlign: 'center' as const, fontFamily: SANS, transition: 'color .15s, border-color .15s', boxShadow: '0 1px 4px rgba(0,0,0,.06)' },
-  audioSwitchBtn: { background: 'none', border: 'none', color: '#1c1812', opacity: 0.4, cursor: 'pointer', fontSize: '.7rem', fontFamily: SANS, padding: 4 },
+  audioBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, border: 'none', borderRadius: 8, padding: '.7rem 1.4rem', fontSize: '.82rem', fontWeight: 600, letterSpacing: '.05em', color: '#fff', cursor: 'pointer', width: '100%', textAlign: 'center' as const, fontFamily: SANS, transition: 'opacity .15s', boxShadow: '0 1px 4px rgba(0,0,0,.12)' },
+  audioBtnNum: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: '50%', background: 'rgba(255,255,255,.25)', fontSize: '.72rem', fontWeight: 700, flexShrink: 0 },
+  playerRow: { display: 'flex', alignItems: 'center', gap: 10, borderRadius: 8, padding: '.55rem .9rem', width: '100%', color: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.12)' },
+  playerIcon: { background: 'rgba(255,255,255,.22)', border: 'none', color: '#fff', width: 30, height: 30, borderRadius: '50%', cursor: 'pointer', fontSize: '.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: SANS },
+  playerTime: { fontFamily: SANS, fontSize: '.68rem', fontVariantNumeric: 'tabular-nums' as const, opacity: 0.85, flexShrink: 0, minWidth: 30, textAlign: 'right' as const },
+  scrubTrack: { position: 'relative' as const, flex: 1, height: 16, display: 'flex', alignItems: 'center', cursor: 'pointer', touchAction: 'none' as const, background: 'linear-gradient(rgba(255,255,255,.3),rgba(255,255,255,.3)) center/100% 4px no-repeat' },
+  scrubFill: { position: 'absolute' as const, left: 0, top: '50%', height: 4, borderRadius: 2, background: '#fff', transform: 'translateY(-50%)' },
+  scrubKnob: { position: 'absolute' as const, top: '50%', width: 12, height: 12, borderRadius: '50%', background: '#fff', transform: 'translate(-50%,-50%)', boxShadow: '0 1px 3px rgba(0,0,0,.3)' },
   preview: { width: '100%', borderRadius: 10, objectFit: 'cover' as const, aspectRatio: '4/3' as const, boxShadow: '0 2px 16px rgba(0,0,0,.1)' },
   spinnerWrap: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 14 },
   spinner: { width: 40, height: 40, border: '3px solid #e4ddd3', borderTopColor: '#c9a84c', borderRadius: '50%', animation: 'spin .8s linear infinite' },

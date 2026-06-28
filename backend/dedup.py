@@ -38,7 +38,7 @@ def find_existing_artwork(new_artwork: dict, entries: list[dict]) -> str | None:
 
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model="claude-opus-4-8",
+        model="claude-sonnet-4-6",
         max_tokens=128,
         system=_SYSTEM,
         messages=[{"role": "user", "content": user_content}],

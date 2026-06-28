@@ -60,7 +60,7 @@ export default function PageBiblio() {
   if (loading) {
     return (
       <div style={s.page}>
-        <h1 style={s.h1}>Bibliothèque</h1>
+        <h1 style={s.h1}>Library</h1>
         <div style={s.spinner} />
       </div>
     )
@@ -69,8 +69,8 @@ export default function PageBiblio() {
   if (items.length === 0) {
     return (
       <div style={s.page}>
-        <h1 style={s.h1}>Bibliothèque</h1>
-        <p style={s.empty}>Aucune œuvre scannée pour l'instant.</p>
+        <h1 style={s.h1}>Library</h1>
+        <p style={s.empty}>No artworks scanned yet.</p>
       </div>
     )
   }
@@ -89,8 +89,8 @@ export default function PageBiblio() {
 
   return (
     <div style={s.page}>
-      <h1 style={s.h1}>Bibliothèque</h1>
-      <p style={s.sub}>{items.length} œuvre{items.length > 1 ? 's' : ''}</p>
+      <h1 style={s.h1}>Library</h1>
+      <p style={s.sub}>{items.length} artwork{items.length > 1 ? 's' : ''}</p>
 
       {museumGroups.map(({ museum, items: groupItems }) => (
         <div key={museum.id} style={s.section}>
@@ -119,7 +119,7 @@ export default function PageBiblio() {
         <div style={s.section}>
           <div style={s.sectionHeader}>
             <span style={{ ...s.sectionDot, background: '#c0b8af' }} />
-            <span style={{ ...s.sectionName, color: '#8a8078' }}>Autres</span>
+            <span style={{ ...s.sectionName, color: '#8a8078' }}>Other</span>
             <span style={s.sectionCount}>{unknownItems.length}</span>
           </div>
           <div style={s.list}>
@@ -204,7 +204,7 @@ function ArtworkModal({ item, playing, isLoadingAudio, onPlay, onClose }: {
                 {playing && isLoadingAudio ? '…' : playing ? '⏸' : '▷'}
               </span>
               <span style={{ fontFamily: PLAYFAIR, fontStyle: 'italic', fontSize: '.85rem' }}>
-                {playing ? 'En cours' : 'Écouter'}
+                {playing ? 'Playing' : 'Play'}
               </span>
             </button>
           )}
@@ -290,7 +290,7 @@ const s = {
   modal: { position: 'relative' as const, background: '#fff', borderRadius: '18px 18px 0 0', width: '100%', maxWidth: 500, maxHeight: '90vh', overflowY: 'auto' as const, boxShadow: '0 -8px 40px rgba(0,0,0,.18)' },
   closeBtn: { position: 'absolute' as const, top: 14, right: 16, background: '#f0ece4', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', fontSize: '.75rem', color: '#1c1812', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
 
-  modalImg: { width: '100%', aspectRatio: '4/3', objectFit: 'cover' as const, display: 'block', borderRadius: '18px 18px 0 0' },
+  modalImg: { width: '100%', height: 'auto', display: 'block', borderRadius: '18px 18px 0 0' },
   modalBody: { padding: '1.2rem 1.4rem 2rem', display: 'flex', flexDirection: 'column' as const, gap: '0.7rem' },
   modalTitre: { fontFamily: PLAYFAIR, fontSize: '1.25rem', fontWeight: 400, margin: 0, color: '#1c1812', lineHeight: 1.3 },
   modalArtiste: { fontFamily: SANS, fontSize: '.78rem', color: '#1c1812', opacity: 0.45, margin: 0 },

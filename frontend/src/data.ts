@@ -1,4 +1,4 @@
-export const LEVELS = ['Inconnu', 'Novice', 'Initié', 'Amateur d\'art', 'Connaisseur', 'Expert']
+export const LEVELS = ['Unknown', 'Novice', 'Initiate', 'Art Lover', 'Connoisseur', 'Expert']
 export const MAX_SCANS = LEVELS.length - 1 // 5
 
 const PORTRAIT = (id: string) =>
@@ -26,8 +26,8 @@ export const MUSEUMS: Museum[] = [
   {
     id: 'louvre',
     name: 'Musée du Louvre',
-    location: '1er arr.',
-    theme: 'Art ancien · Antiquité–XIXe s.',
+    location: '1st arr.',
+    theme: 'Old Masters · Antiquity–19th c.',
     color: '#C9A84C',
     icon: '🏛️',
     artists: [
@@ -46,8 +46,8 @@ export const MUSEUMS: Museum[] = [
   {
     id: 'orsay',
     name: 'Musée d\'Orsay',
-    location: '7e arr.',
-    theme: 'Impressionnisme · 1848–1914',
+    location: '7th arr.',
+    theme: 'Impressionism · 1848–1914',
     color: '#4E8A6E',
     icon: '🌿',
     artists: [
@@ -66,8 +66,8 @@ export const MUSEUMS: Museum[] = [
   {
     id: 'pompidou',
     name: 'Centre Pompidou',
-    location: '4e arr.',
-    theme: 'Art moderne & contemporain · XXe s.',
+    location: '4th arr.',
+    theme: 'Modern & contemporary art · 20th c.',
     color: '#D44C31',
     icon: '🎨',
     artists: [
@@ -86,8 +86,8 @@ export const MUSEUMS: Museum[] = [
   {
     id: 'orangerie',
     name: 'Musée de l\'Orangerie',
-    location: '1er arr. · Tuileries',
-    theme: 'École de Paris · Nymphéas de Monet',
+    location: '1st arr. · Tuileries',
+    theme: 'School of Paris · Monet\'s Water Lilies',
     color: '#9B7A52',
     icon: '🌊',
     artists: [
@@ -106,8 +106,8 @@ export const MUSEUMS: Museum[] = [
   {
     id: 'fondation-louis-vuitton',
     name: 'Fondation Louis Vuitton',
-    location: '16e arr. · Bois de Boulogne',
-    theme: 'Art contemporain · XXIe s.',
+    location: '16th arr. · Bois de Boulogne',
+    theme: 'Contemporary art · 21st c.',
     color: '#4A6FA5',
     icon: '✨',
     artists: [

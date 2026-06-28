@@ -20,5 +20,8 @@
     "Renaissance iconography"
   ],
   "artist_id": "leonard-de-vinci",
-  "_key": "a0838374d1202000"
+  "_key": "a0838374d1202000",
+  "depicted_moment": null,
+  "narrative_context": null,
+  "scene_characters": null
 }
