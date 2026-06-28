@@ -5,11 +5,12 @@ LONG_TERM_MEMORY = ROOT / "docs" / "long_term_memory.md"
 
 # Démo : le profil utilisateur se résume à 2 personas. Le ton choisi dans le
 # questionnaire détermine lequel ; le reste des réponses est ignoré.
-PERSONAS = {
+_PERSONA_TEMPLATES = {
     "serious": (
         "# Long-term memory — Visitor profile\n"
         "\n"
         "Persona: serious\n"
+        "{name_line}"
         "\n"
         "The visitor prefers a serious, academic tone. Favor historical context, "
         "factual rigor and in-depth analysis of the work.\n"
@@ -18,6 +19,7 @@ PERSONAS = {
         "# Long-term memory — Visitor profile\n"
         "\n"
         "Persona: fun\n"
+        "{name_line}"
         "\n"
         "The visitor prefers a playful, accessible tone. Favor surprising anecdotes, "
         "fun comparisons and a lively, light narration.\n"
@@ -32,7 +34,10 @@ def persona_from_tone(tone: str | None) -> str:
 
 def save_profile(data: dict) -> str:
     persona = persona_from_tone(data.get("tone"))
-    LONG_TERM_MEMORY.write_text(PERSONAS[persona], encoding="utf-8")
+    name = (data.get("name") or "").strip()
+    name_line = f"Visitor name: {name}\n" if name else ""
+    text = _PERSONA_TEMPLATES[persona].format(name_line=name_line)
+    LONG_TERM_MEMORY.write_text(text, encoding="utf-8")
     return persona
 
 
