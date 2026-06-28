@@ -1,8 +1,20 @@
 export interface VisitorProfile {
+  name: string
   age_range: string
   level: string
   interests: string[]
   tone: string
+}
+
+export interface JourneyPlan {
+  cityId: string
+  cityName: string
+  museumId: string
+  museumName: string
+  museumBookingUrl: string
+  artist?: string
+  artistId?: string
+  era?: string
 }
 
 export interface Caption {
