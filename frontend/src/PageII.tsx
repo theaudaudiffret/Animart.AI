@@ -1,12 +1,6 @@
 import { useState } from 'react'
 import { MUSEUMS, MAX_SCANS, getLevel, museumProgress } from './data'
-
-const PROGRESS_KEY = 'genz-museum-progress'
-
-function getProgress(): Record<string, number> {
-  try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') }
-  catch { return {} }
-}
+import type { JourneyPlan } from './types'
 
 // ─── Ring SVG ────────────────────────────────────────────────────────────────
 
@@ -32,9 +26,12 @@ function Ring({ progress, size, color, bg = '#e4ddd3' }: {
 
 // ─── Museum list ──────────────────────────────────────────────────────────────
 
-export default function PageII() {
+export default function PageII({ progress, journey }: {
+  progress: Record<string, number>
+  journey: JourneyPlan | null
+}) {
   const [selectedMuseum, setSelectedMuseum] = useState<string | null>(null)
-  const scans = getProgress()
+  const scans = progress
 
   if (selectedMuseum) {
     const museum = MUSEUMS.find((m) => m.id === selectedMuseum)!
@@ -53,6 +50,7 @@ export default function PageII() {
           const totalScans = m.artists.reduce((sum, a) => sum + Math.min(scans[a.id] ?? 0, MAX_SCANS), 0)
           const isLast = i === MUSEUMS.length - 1
           const initials = m.id.slice(0, 2).toUpperCase()
+          const isTarget = journey?.museumId === m.id
 
           return (
             <div key={m.id} style={s.row}>
@@ -74,8 +72,11 @@ export default function PageII() {
                 {!isLast && <div style={{ ...s.line, background: prog > 0 ? m.color + '55' : '#e4ddd3' }} />}
               </div>
 
-              <button style={s.museumCard} onClick={() => setSelectedMuseum(m.id)}>
-                <div style={{ ...s.museumName, color: prog > 0 ? m.color : '#1c1812' }}>{m.name}</div>
+              <button style={{ ...s.museumCard, ...(isTarget ? { borderColor: m.color + '88', boxShadow: `0 0 0 1px ${m.color}33` } : {}) }} onClick={() => setSelectedMuseum(m.id)}>
+                <div style={s.museumNameRow}>
+                  <div style={{ ...s.museumName, color: prog > 0 ? m.color : '#1c1812' }}>{m.name}</div>
+                  {isTarget && <span style={{ ...s.targetBadge, background: m.color + '18', color: m.color }}>Your visit</span>}
+                </div>
                 <div style={s.museumLocation}>{m.location}</div>
                 <div style={s.museumTheme}>{m.theme}</div>
                 <div style={s.museumStats}>
@@ -203,7 +204,9 @@ const s = {
   line: { width: 1, height: 28, marginTop: 4, marginBottom: 4 },
 
   museumCard: { flex: 1, background: '#ffffff', border: '1px solid #e8e2d8', borderRadius: 10, padding: '.9rem 1rem', cursor: 'pointer', textAlign: 'left' as const, marginBottom: 8, boxShadow: '0 1px 4px rgba(0,0,0,.05)' },
-  museumName: { fontFamily: PLAYFAIR, fontSize: '1rem', fontWeight: 400, marginBottom: 3 },
+  museumNameRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 },
+  museumName: { fontFamily: PLAYFAIR, fontSize: '1rem', fontWeight: 400 },
+  targetBadge: { fontFamily: SANS, fontSize: '.55rem', fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase' as const, padding: '2px 7px', borderRadius: 4, flexShrink: 0 },
   museumLocation: { fontFamily: SANS, fontSize: '.68rem', color: '#1c1812', opacity: 0.45, letterSpacing: '.03em', marginBottom: 2 },
   museumTheme: { fontFamily: SANS, fontSize: '.68rem', color: '#1c1812', opacity: 0.3, marginBottom: 5 },
   museumStats: { fontFamily: SANS, fontSize: '.65rem', color: '#1c1812', opacity: 0.3 },

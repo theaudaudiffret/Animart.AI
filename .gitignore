@@ -14,6 +14,10 @@ wheels/
 
 # Runtime user session
 docs/session.json
+docs/long_term_memory.md
+
+# Per-user runtime profiles (library, progress, persona)
+users/
 
 # Generated immersive scenes
 outputs/

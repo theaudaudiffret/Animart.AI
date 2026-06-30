@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { MUSEUMS, getArtistById } from './data'
+import { api, assetUrl } from './api'
 
 interface LibraryItem {
   phash: string
@@ -17,7 +18,7 @@ interface ArtworkDetail {
   technique?: string | null
 }
 
-export default function PageBiblio() {
+export default function PageBiblio({ persona }: { persona: string | null }) {
   const [items, setItems] = useState<LibraryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [playingPhash, setPlayingPhash] = useState<string | null>(null)
@@ -26,7 +27,7 @@ export default function PageBiblio() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
-    fetch('/library')
+    api('/library')
       .then((r) => r.json())
       .then(setItems)
       .catch(() => {})
@@ -43,7 +44,7 @@ export default function PageBiblio() {
     setPlayingPhash(item.phash)
     setIsLoadingAudio(true)
     const endpoint = item.audio_mode === 'immersive' ? '/immersive-audio' : '/audio'
-    const audio = new Audio(`${endpoint}/${item.phash}`)
+    const audio = new Audio(assetUrl(`${endpoint}/${item.phash}`, persona))
     audioRef.current = audio
     audio.oncanplaythrough = () => setIsLoadingAudio(false)
     audio.onended = () => setPlayingPhash(null)
@@ -107,6 +108,7 @@ export default function PageBiblio() {
                 active={playingPhash === item.phash}
                 isLoadingAudio={isLoadingAudio}
                 accentColor={museum.color}
+                persona={persona}
                 onPlay={handlePlay}
                 onClick={() => setModal(item)}
               />
@@ -130,6 +132,7 @@ export default function PageBiblio() {
                 active={playingPhash === item.phash}
                 isLoadingAudio={isLoadingAudio}
                 accentColor="#8a8078"
+                persona={persona}
                 onPlay={handlePlay}
                 onClick={() => setModal(item)}
               />
@@ -143,6 +146,7 @@ export default function PageBiblio() {
           item={modal}
           playing={playingPhash === modal.phash}
           isLoadingAudio={isLoadingAudio}
+          persona={persona}
           onPlay={handlePlay}
           onClose={handleClose}
         />
@@ -151,10 +155,11 @@ export default function PageBiblio() {
   )
 }
 
-function ArtworkModal({ item, playing, isLoadingAudio, onPlay, onClose }: {
+function ArtworkModal({ item, playing, isLoadingAudio, persona, onPlay, onClose }: {
   item: LibraryItem
   playing: boolean
   isLoadingAudio: boolean
+  persona: string | null
   onPlay: (item: LibraryItem) => void
   onClose: () => void
 }) {
@@ -162,7 +167,7 @@ function ArtworkModal({ item, playing, isLoadingAudio, onPlay, onClose }: {
   const accentColor = getArtistById(item.artist_id || '')?.museum.color ?? '#c9a84c'
 
   useEffect(() => {
-    fetch(`/artwork/${item.phash}`)
+    api(`/artwork/${item.phash}`)
       .then((r) => r.json())
       .then((d) => setDetail({ description: d.description, epoque: d.epoque, technique: d.technique }))
       .catch(() => {})
@@ -175,7 +180,7 @@ function ArtworkModal({ item, playing, isLoadingAudio, onPlay, onClose }: {
 
         {item.has_photo && (
           <img
-            src={`/photos/${item.phash}`}
+            src={assetUrl(`/photos/${item.phash}`, persona)}
             alt={item.titre ?? ''}
             style={s.modalImg}
           />
@@ -218,11 +223,12 @@ function ArtworkModal({ item, playing, isLoadingAudio, onPlay, onClose }: {
   )
 }
 
-function ArtworkRow({ item, active, isLoadingAudio, accentColor, onPlay, onClick }: {
+function ArtworkRow({ item, active, isLoadingAudio, accentColor, persona, onPlay, onClick }: {
   item: LibraryItem
   active: boolean
   isLoadingAudio: boolean
   accentColor: string
+  persona: string | null
   onPlay: (item: LibraryItem) => void
   onClick: () => void
 }) {
@@ -232,7 +238,7 @@ function ArtworkRow({ item, active, isLoadingAudio, accentColor, onPlay, onClick
       onClick={onClick}
     >
       {item.has_photo
-        ? <img src={`/photos/${item.phash}`} alt="" style={s.thumb} />
+        ? <img src={assetUrl(`/photos/${item.phash}`, persona)} alt="" style={s.thumb} />
         : <div style={s.thumbFallback}>◆</div>}
 
       <div style={s.info}>

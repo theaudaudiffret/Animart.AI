@@ -1,16 +1,9 @@
 import { useRef, useState } from 'react'
-import type { ArtworkSummary, Caption, JourneyPlan, VisitorProfile } from './types'
-import { CITIES, ERAS } from './cityData'
+import type { ArtworkSummary, Caption } from './types'
+import { api, type Me } from './api'
 
 const MAX_PX = 1600
 const JPEG_QUALITY = 0.85
-const ONBOARDED_KEY = 'genz-museum-onboarded'
-const JOURNEY_KEY = 'genz-museum-journey'
-
-const AGE_OPTIONS = ['Child (under 12)', 'Teen (12-17)', 'Adult (18-64)', 'Senior (65+)']
-const LEVEL_OPTIONS = ['Novice', 'Amateur', 'Expert']
-const INTEREST_OPTIONS = ['History & context', 'Unusual anecdotes', 'Artistic technique', 'Symbolism & interpretation']
-const TONE_OPTIONS = ['Playful', 'Serious']
 
 function resizeImage(file: File): Promise<Blob> {
   return new Promise((resolve, reject) => {
@@ -45,19 +38,19 @@ type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type AudioMode = 'narrate' | 'immersive'
 
 type State =
-  | { status: 'onboarding' }
-  | { status: 'city-selection' }
   | { status: 'idle' }
   | { status: 'loading'; preview: string }
   | { status: 'result'; preview: string; data: ArtworkSummary }
   | { status: 'error'; preview: string; message: string }
 
-export default function PageI({ onArtistFound, onNewProfile, hidden }: {
-  onArtistFound: (id: string) => void; onNewProfile: () => void; hidden: boolean
+export default function PageI({ me, onArtistFound, onSwitchProfile, onNewProfile, hidden }: {
+  me: Me
+  onArtistFound: (id: string, scans: number | null) => void
+  onSwitchProfile: () => void
+  onNewProfile: () => void
+  hidden: boolean
 }) {
-  const [state, setState] = useState<State>(() =>
-    localStorage.getItem(ONBOARDED_KEY) ? { status: 'idle' } : { status: 'onboarding' },
-  )
+  const [state, setState] = useState<State>({ status: 'idle' })
   const [narrLoad, setNarrLoad] = useState<LoadState>('idle')
   const [immLoad, setImmLoad] = useState<LoadState>('idle')
   const [playing, setPlaying] = useState<AudioMode | null>(null)
@@ -76,10 +69,9 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
       const blob = await resizeImage(file)
       const form = new FormData()
       form.append('file', blob, 'photo.jpg')
-      const res = await fetch('/analyze', { method: 'POST', body: form })
-      if (!res.ok) throw new Error(`Erreur serveur (${res.status})`)
+      const res = await api('/analyze', { method: 'POST', body: form })
       const data: ArtworkSummary = await res.json()
-      if (data.artist_id && !data.in_session) onArtistFound(data.artist_id)
+      if (data.artist_id) onArtistFound(data.artist_id, data.artist_scans)
       clearAudio()
       setState({ status: 'result', preview, data })
       loadAudio('narrate', data)
@@ -101,12 +93,11 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
     const setProgress = setProgressFor(mode)
     setLoad('loading')
     try {
-      const res = await fetch(mode === 'narrate' ? '/narrate' : '/immersive', {
+      const res = await api(mode === 'narrate' ? '/narrate' : '/immersive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       })
-      if (!res.ok) throw new Error()
 
       let blob: Blob
       let sceneCaptions: Caption[] = []
@@ -204,36 +195,9 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
     if (inputRef.current) inputRef.current.value = ''
   }
 
-  async function newProfile() {
-    if (!confirm('Archive the current visit and create a new profile?')) return
-    try {
-      await fetch('/new-profile', { method: 'POST' })
-    } finally {
-      clearAudio()
-      onNewProfile()
-      localStorage.removeItem(ONBOARDED_KEY)
-      localStorage.removeItem(JOURNEY_KEY)
-      setState({ status: 'onboarding' })
-    }
-  }
-
   return (
     <div style={{ ...s.page, display: hidden ? 'none' : 'flex' }}>
-      {state.status !== 'onboarding' && state.status !== 'city-selection' && (
-        <h1 style={s.h1}>Scan an artwork</h1>
-      )}
-
-      {state.status === 'onboarding' && (
-        <Onboarding onDone={() => setState({ status: 'city-selection' })} />
-      )}
-
-      {state.status === 'city-selection' && (
-        <CitySelection onDone={(plan) => {
-          localStorage.setItem(ONBOARDED_KEY, '1')
-          localStorage.setItem(JOURNEY_KEY, JSON.stringify(plan))
-          setState({ status: 'idle' })
-        }} />
-      )}
+      {state.status !== 'idle' && <h1 style={s.h1}>Scan an artwork</h1>}
 
       <input
         ref={inputRef}
@@ -245,23 +209,10 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
       />
 
       {state.status === 'idle' && (
-        <div style={s.idleWrap}>
-          <h1 style={s.appTitle}>Animart.ai</h1>
-          <button style={s.cameraBtn} onClick={() => inputRef.current?.click()}>
-            <svg width="28" height="24" viewBox="0 0 28 24" fill="none">
-              <path d="M9.5 4.5L8 7H3a1.5 1.5 0 0 0-1.5 1.5v12A1.5 1.5 0 0 0 3 22h22a1.5 1.5 0 0 0 1.5-1.5v-12A1.5 1.5 0 0 0 25 7h-5l-1.5-2.5z" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" fill="none"/>
-              <circle cx="14" cy="14" r="4.5" stroke="#fff" strokeWidth="1.6"/>
-              <circle cx="22.5" cy="9.5" r="1" fill="#fff"/>
-            </svg>
-          </button>
-          <span style={s.cameraLabel}>Take a photo</span>
-          <button style={s.btnSecondary} onClick={newProfile}>New profile</button>
-        </div>
+        <Idle me={me} onShoot={() => inputRef.current?.click()} onSwitchProfile={onSwitchProfile} onNewProfile={onNewProfile} />
       )}
 
-      {state.status !== 'idle' && state.status !== 'onboarding' && state.status !== 'city-selection' && (
-        <img src={state.preview} alt="" style={s.preview} />
-      )}
+      {state.status !== 'idle' && <img src={state.preview} alt="" style={s.preview} />}
 
       {state.status === 'loading' && (
         <div style={s.spinnerWrap}>
@@ -298,290 +249,54 @@ export default function PageI({ onArtistFound, onNewProfile, hidden }: {
   )
 }
 
-function Onboarding({ onDone }: { onDone: () => void }) {
-  const [visitorName, setVisitorName] = useState('')
-  const [ageRange, setAgeRange] = useState<string | null>(null)
-  const [level, setLevel] = useState<string | null>(null)
-  const [interests, setInterests] = useState<string[]>([])
-  const [tone, setTone] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const canSubmit = visitorName.trim() !== '' && ageRange !== null && level !== null && tone !== null && !submitting
-
-  async function submit() {
-    if (!canSubmit) return
-    setSubmitting(true)
-    const profile: VisitorProfile = { name: visitorName.trim(), age_range: ageRange!, level: level!, interests, tone: tone! }
-    try {
-      await fetch('/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile) })
-    } finally {
-      onDone()
-    }
-  }
-
-  return (
-    <div style={s.col}>
-      <div style={s.welcomeHero}>
-        <h1 style={s.welcomeTitle}>Museum Guide</h1>
-        <p style={s.welcomeTagline}>Your personal audio guide</p>
-        <p style={s.welcomeSubtitle}>Tell us a bit about yourself so we can tailor your visit.</p>
-      </div>
-
-      <div style={s.group}>
-        <div style={s.groupLabel}>What should we call you?</div>
-        <input
-          type="text"
-          placeholder="Your name"
-          value={visitorName}
-          onChange={(e) => setVisitorName(e.target.value)}
-          style={s.nameInput}
-        />
-      </div>
-
-      <Choice label="Your age" options={AGE_OPTIONS} value={ageRange} onChange={setAgeRange} />
-      <Choice label="Your art level" options={LEVEL_OPTIONS} value={level} onChange={setLevel} />
-      <MultiChoice label="What interests you" options={INTEREST_OPTIONS} values={interests}
-        onToggle={(i) => setInterests((p) => p.includes(i) ? p.filter((x) => x !== i) : [...p, i])} />
-      <Choice label="Your preferred tone" options={TONE_OPTIONS} value={tone} onChange={setTone} />
-      <button style={{ ...s.submitBtn, opacity: canSubmit ? 1 : 0.45 }} disabled={!canSubmit} onClick={submit}>
-        {submitting ? 'Getting ready…' : 'Next →'}
-      </button>
-    </div>
-  )
-}
-
-function Choice({ label, options, value, onChange }: {
-  label: string; options: string[]; value: string | null; onChange: (v: string) => void
+// Idle/home screen: greeting, the planned journey, the big shoot button, and
+// the profile switcher.
+function Idle({ me, onShoot, onSwitchProfile, onNewProfile }: {
+  me: Me
+  onShoot: () => void
+  onSwitchProfile: () => void
+  onNewProfile: () => void
 }) {
+  const journey = me.journey
   return (
-    <div style={s.group}>
-      <div style={s.groupLabel}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-        {options.map((opt) => (
-          <button key={opt} type="button"
-            style={{ ...s.chip, ...(value === opt ? s.chipOn : {}) }}
-            onClick={() => onChange(opt)}>{opt}</button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function MultiChoice({ label, options, values, onToggle }: {
-  label: string; options: string[]; values: string[]; onToggle: (v: string) => void
-}) {
-  return (
-    <div style={s.group}>
-      <div style={s.groupLabel}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-        {options.map((opt) => (
-          <button key={opt} type="button"
-            style={{ ...s.chip, ...(values.includes(opt) ? s.chipOn : {}) }}
-            onClick={() => onToggle(opt)}>{opt}</button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-const FILTER_TYPES = [
-  { id: 'museum' as const, label: 'A specific museum' },
-  { id: 'artist' as const, label: 'An artist I love' },
-  { id: 'era'   as const, label: 'An art period' },
-]
-
-type FilterType = 'museum' | 'artist' | 'era'
-
-function CitySelection({ onDone }: { onDone: (plan: JourneyPlan) => void }) {
-  const [cityId, setCityId] = useState<string | null>(null)
-  const [filterType, setFilterType] = useState<FilterType | null>(null)
-  const [museumId, setMuseumId] = useState<string | null>(null)
-  const [selectedArtists, setSelectedArtists] = useState<Array<{ name: string; id?: string }>>([])
-  const [selectedEraIds, setSelectedEraIds] = useState<string[]>([])
-
-  const city = CITIES.find((c) => c.id === cityId) ?? null
-
-  const cityArtists = city
-    ? Array.from(
-        new Map(city.museums.flatMap((m) => m.featuredArtists).map((a) => [a.name, a])).values(),
-      )
-    : []
-
-  const cityEras = city
-    ? ERAS.filter((e) => city.museums.some((m) => m.eras.includes(e.id)))
-    : []
-
-  const recommendation = (() => {
-    if (!city) return null
-    if (filterType === 'museum' && museumId)
-      return city.museums.find((m) => m.id === museumId) ?? null
-    if (filterType === 'artist' && selectedArtists.length > 0) {
-      const scored = city.museums
-        .map((m) => ({
-          museum: m,
-          score: selectedArtists.filter((a) => m.featuredArtists.some((fa) => fa.name === a.name)).length,
-        }))
-        .filter((x) => x.score > 0)
-      if (!scored.length) return null
-      return scored.sort((a, b) => b.score - a.score)[0].museum
-    }
-    if (filterType === 'era' && selectedEraIds.length > 0) {
-      const scored = city.museums
-        .map((m) => ({
-          museum: m,
-          score: selectedEraIds.filter((eid) => m.eras.includes(eid)).length,
-        }))
-        .filter((x) => x.score > 0)
-      if (!scored.length) return null
-      return scored.sort((a, b) => b.score - a.score)[0].museum
-    }
-    return null
-  })()
-
-  function selectCity(id: string) {
-    setCityId(id)
-    setFilterType(null)
-    setMuseumId(null)
-    setSelectedArtists([])
-    setSelectedEraIds([])
-  }
-
-  function selectFilterType(type: FilterType) {
-    setFilterType(type)
-    setMuseumId(null)
-    setSelectedArtists([])
-    setSelectedEraIds([])
-  }
-
-  function toggleArtist(a: { name: string; id?: string }) {
-    setSelectedArtists((prev) =>
-      prev.some((x) => x.name === a.name) ? prev.filter((x) => x.name !== a.name) : [...prev, a],
-    )
-  }
-
-  function toggleEra(id: string) {
-    setSelectedEraIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  }
-
-  function finish() {
-    if (!city || !recommendation) return
-    const eraLabel = selectedEraIds.length
-      ? selectedEraIds.map((id) => ERAS.find((e) => e.id === id)?.label).filter(Boolean).join(', ')
-      : undefined
-    const artistNames = selectedArtists.length ? selectedArtists.map((a) => a.name).join(', ') : undefined
-    const primaryArtistId = selectedArtists.length === 1 ? selectedArtists[0].id : undefined
-    onDone({
-      cityId: city.id,
-      cityName: city.name,
-      museumId: recommendation.id,
-      museumName: recommendation.name,
-      museumBookingUrl: recommendation.bookingUrl,
-      artist: artistNames,
-      artistId: primaryArtistId,
-      era: eraLabel,
-    })
-  }
-
-  return (
-    <div style={s.col}>
-      <div style={s.welcomeHero}>
-        <h1 style={s.welcomeTitle}>Plan your visit</h1>
-        <p style={s.welcomeTagline}>Where are you exploring?</p>
+    <div style={s.idleWrap}>
+      <div style={s.greeting}>
+        <span style={s.greetingHi}>Hi {me.name || 'there'}</span>
+        <span style={s.greetingSub}>Ready to explore?</span>
       </div>
 
-      <div style={s.group}>
-        <div style={s.groupLabel}>Choose a city</div>
-        <div style={s.chipRow}>
-          {CITIES.map((c) => (
-            <button key={c.id} type="button"
-              style={{ ...s.chip, ...(cityId === c.id ? s.chipOn : {}) }}
-              onClick={() => selectCity(c.id)}>
-              {c.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {city && (
-        <div style={s.group}>
-          <div style={s.groupLabel}>What guides your visit?</div>
-          <div style={s.chipRow}>
-            {FILTER_TYPES.map((ft) => (
-              <button key={ft.id} type="button"
-                style={{ ...s.chip, ...(filterType === ft.id ? s.chipOn : {}) }}
-                onClick={() => selectFilterType(ft.id)}>
-                {ft.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {filterType === 'museum' && city && (
-        <div style={s.group}>
-          <div style={s.groupLabel}>Pick a museum</div>
-          <div style={s.chipRow}>
-            {city.museums.map((m) => (
-              <button key={m.id} type="button"
-                style={{ ...s.chip, ...(museumId === m.id ? s.chipOn : {}) }}
-                onClick={() => setMuseumId((prev) => (prev === m.id ? null : m.id))}>
-                {m.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {filterType === 'artist' && city && (
-        <div style={s.group}>
-          <div style={s.groupLabel}>Pick one or more artists</div>
-          <div style={s.chipRow}>
-            {cityArtists.map((a) => (
-              <button key={a.name} type="button"
-                style={{ ...s.chip, ...(selectedArtists.some((x) => x.name === a.name) ? s.chipOn : {}) }}
-                onClick={() => toggleArtist(a)}>
-                {a.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {filterType === 'era' && city && (
-        <div style={s.group}>
-          <div style={s.groupLabel}>Pick one or more eras</div>
-          <div style={s.chipRow}>
-            {cityEras.map((e) => (
-              <button key={e.id} type="button"
-                style={{ ...s.chip, ...(selectedEraIds.includes(e.id) ? s.chipOn : {}) }}
-                onClick={() => toggleEra(e.id)}>
-                {e.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {recommendation && (
-        <>
-          <div style={s.card}>
-            <div style={s.cardLabel}>Our recommendation</div>
-            <div style={s.cardLg}>{recommendation.name}</div>
-            <div style={{ ...s.cardVal, opacity: 0.55, marginTop: 4 }}>
-              Best match for your choices
-            </div>
-          </div>
-          <div style={s.ctaRow}>
+      {journey && (
+        <div style={s.journeyCard}>
+          <span style={s.journeyLabel}>Your visit</span>
+          <span style={s.journeyMuseum}>{journey.museumName}</span>
+          <span style={s.journeyCity}>{journey.cityName}</span>
+          {journey.museumBookingUrl && (
             <button
-              style={s.bookBtn}
-              onClick={() => window.open(recommendation.bookingUrl, '_blank', 'noopener,noreferrer')}>
+              style={s.journeyBook}
+              onClick={() => window.open(journey.museumBookingUrl, '_blank', 'noopener,noreferrer')}>
               Book tickets ↗
             </button>
-            <button style={{ ...s.submitBtn, width: 'auto' }} onClick={finish}>
-              Start the journey →
-            </button>
-          </div>
-        </>
+          )}
+        </div>
       )}
+
+      <div style={s.shootBlock}>
+        <button style={s.cameraBtn} onClick={onShoot}>
+          <svg width="28" height="24" viewBox="0 0 28 24" fill="none">
+            <path d="M9.5 4.5L8 7H3a1.5 1.5 0 0 0-1.5 1.5v12A1.5 1.5 0 0 0 3 22h22a1.5 1.5 0 0 0 1.5-1.5v-12A1.5 1.5 0 0 0 25 7h-5l-1.5-2.5z" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" fill="none"/>
+            <circle cx="14" cy="14" r="4.5" stroke="#fff" strokeWidth="1.6"/>
+            <circle cx="22.5" cy="9.5" r="1" fill="#fff"/>
+          </svg>
+        </button>
+        <span style={s.cameraLabel}>Take a photo</span>
+        <span style={s.cameraHint}>Point at any artwork — we'll identify it and narrate a commentary.</span>
+      </div>
+
+      <div style={s.profileFooter}>
+        <button style={s.linkBtn} onClick={onSwitchProfile}>Switch profile</button>
+        <span style={s.footerDot}>·</span>
+        <button style={s.linkBtn} onClick={onNewProfile}>New profile</button>
+      </div>
     </div>
   )
 }
@@ -808,8 +523,18 @@ const s = {
   col: { width: '100%', display: 'flex', flexDirection: 'column' as const, gap: '1rem' },
   h1: { fontFamily: PLAYFAIR, fontSize: '1.6rem', fontWeight: 400, letterSpacing: '.01em', color: '#1c1812' },
 
-  idleWrap: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: '1rem', minHeight: '62vh' },
-  appTitle: { fontFamily: PLAYFAIR, fontStyle: 'italic' as const, fontSize: '3rem', fontWeight: 400, letterSpacing: '.01em', color: '#8a5a2b', marginBottom: '1.6rem', textShadow: '0 1px 2px rgba(138,90,43,.12)' },
+  idleWrap: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: '1.6rem', minHeight: '70vh', width: '100%' },
+  greeting: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 2 },
+  greetingHi: { fontFamily: PLAYFAIR, fontStyle: 'italic' as const, fontSize: '2rem', fontWeight: 400, color: '#8a5a2b' },
+  greetingSub: { fontFamily: SANS, fontSize: '.78rem', letterSpacing: '.06em', color: '#1c1812', opacity: 0.4 },
+
+  journeyCard: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 3, background: '#ffffff', border: '1px solid #e8e2d8', borderRadius: 12, padding: '1rem 1.4rem', boxShadow: '0 1px 4px rgba(0,0,0,.05)', maxWidth: 360, width: '100%' },
+  journeyLabel: { fontFamily: PLAYFAIR, fontStyle: 'italic' as const, fontSize: '.62rem', letterSpacing: '.12em', textTransform: 'uppercase' as const, color: '#a67c2a' },
+  journeyMuseum: { fontFamily: PLAYFAIR, fontSize: '1.15rem', color: '#1c1812', textAlign: 'center' as const },
+  journeyCity: { fontFamily: SANS, fontSize: '.72rem', color: '#1c1812', opacity: 0.45 },
+  journeyBook: { marginTop: 8, background: 'none', color: '#a67c2a', border: '1px solid #d8c79a', borderRadius: 7, padding: '6px 14px', fontSize: '.74rem', fontWeight: 600, letterSpacing: '.03em', cursor: 'pointer', fontFamily: SANS },
+
+  shootBlock: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: '.8rem' },
   cameraBtn: {
     width: 80, height: 80, borderRadius: '50%',
     background: 'linear-gradient(135deg, #c9a84c, #a67c2a)',
@@ -817,8 +542,13 @@ const s = {
     cursor: 'pointer', boxShadow: '0 4px 20px rgba(166,124,42,.35)',
   },
   cameraLabel: { fontFamily: SANS, fontSize: '.65rem', letterSpacing: '.15em', textTransform: 'uppercase' as const, color: '#1c1812', opacity: 0.45 },
+  cameraHint: { fontFamily: SANS, fontSize: '.74rem', color: '#1c1812', opacity: 0.4, textAlign: 'center' as const, maxWidth: 260, lineHeight: 1.5 },
+
+  profileFooter: { display: 'flex', alignItems: 'center', gap: 8 },
+  linkBtn: { background: 'none', color: '#1c1812', border: 'none', fontSize: '.74rem', opacity: 0.4, cursor: 'pointer', textDecoration: 'underline' as const, fontFamily: SANS, padding: 0 },
+  footerDot: { color: '#1c1812', opacity: 0.3, fontSize: '.74rem' },
+
   btn: { background: '#1c1812', color: '#f7f4ef', border: 'none', borderRadius: 8, padding: '.85rem 2rem', fontSize: '.88rem', fontWeight: 600, letterSpacing: '.04em', cursor: 'pointer', width: '100%', maxWidth: 320, fontFamily: SANS },
-  btnSecondary: { background: 'none', color: '#1c1812', border: 'none', fontSize: '.75rem', opacity: 0.35, cursor: 'pointer', textDecoration: 'underline' as const, fontFamily: SANS },
   audioChoice: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' },
   audioBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, border: 'none', borderRadius: 8, padding: '.7rem 1.4rem', fontSize: '.82rem', fontWeight: 600, letterSpacing: '.05em', color: '#fff', cursor: 'pointer', width: '100%', textAlign: 'center' as const, fontFamily: SANS, transition: 'opacity .15s', boxShadow: '0 1px 4px rgba(0,0,0,.12)' },
   audioBtnNum: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: '50%', background: 'rgba(255,255,255,.25)', fontSize: '.72rem', fontWeight: 700, flexShrink: 0 },
@@ -842,23 +572,6 @@ const s = {
   captionWord: { opacity: 0.35 },
   captionActive: { opacity: 1, color: '#a67c2a', fontWeight: 600 },
 
-  welcomeHero: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 6, paddingBottom: 8, borderBottom: '1px solid #e8e2d8', marginBottom: 4 },
-  welcomeTitle: { fontFamily: PLAYFAIR, fontSize: '2rem', fontWeight: 400, color: '#1c1812', margin: 0, letterSpacing: '.01em' },
-  welcomeTagline: { fontFamily: PLAYFAIR, fontStyle: 'italic', fontSize: '.88rem', color: '#a67c2a', margin: 0 },
-  welcomeSubtitle: { fontFamily: SANS, fontSize: '.8rem', color: '#1c1812', opacity: 0.45, margin: 0, textAlign: 'center' as const },
-
-  nameInput: { width: '100%', background: '#ffffff', border: '1px solid #e4ddd3', borderRadius: 8, padding: '10px 14px', fontSize: '.9rem', fontFamily: SANS, color: '#1c1812', outline: 'none', boxSizing: 'border-box' as const },
-
-  group: { display: 'flex', flexDirection: 'column' as const, gap: 10 },
-  groupLabel: { fontFamily: PLAYFAIR, fontStyle: 'italic', fontSize: '.7rem', letterSpacing: '.06em', color: '#1c1812', opacity: 0.5 },
-
   chip: { background: '#f0ece4', color: '#1c1812', border: '1px solid #e4ddd3', borderRadius: 6, padding: '5px 12px', fontSize: '.82rem', cursor: 'pointer', fontFamily: SANS },
-  chipOn: { background: '#1c1812', color: '#f7f4ef', border: '1px solid #1c1812' },
-  chipRow: { display: 'flex', flexWrap: 'wrap' as const, gap: 7 },
-
-  submitBtn: { width: '100%', background: '#1c1812', color: '#f7f4ef', border: 'none', borderRadius: 8, padding: '.9rem', fontSize: '.88rem', letterSpacing: '.06em', fontWeight: 600, cursor: 'pointer', fontFamily: SANS },
-  bookBtn: { flex: 1, background: 'none', color: '#1c1812', border: '1.5px solid #1c1812', borderRadius: 8, padding: '.9rem', fontSize: '.88rem', letterSpacing: '.03em', fontWeight: 500, cursor: 'pointer', fontFamily: SANS },
-  ctaRow: { display: 'flex', gap: 10, marginTop: 8 },
-
   dot: { width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'inline-block' },
 } as const

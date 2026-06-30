@@ -83,27 +83,29 @@ Requires `.env` with `ANTHROPIC_API_KEY` and `ELEVENLABS_API_KEY`. Python ≥ 3.
 ## Architecture
 
 **Backend** (`backend/`, FastAPI):
-- `server.py` — routes (`/analyze`, `/narrate`, `/immersive`, `/profile`, `/new-profile`, `/library`, `/artwork/{key}`, `/photos/{key}`, `/audio/{key}`, `/immersive-audio/{key}`) + storage helpers. `/artwork/{key}` returns the full stored artwork JSON (feeds the library detail modal). Wikipedia image fetch uses async `httpx` + `curl` fallback (upload.wikimedia.org blocks Python TLS).
+- `server.py` — routes (`/profiles`, `/profile`, `/journey`, `/me`, `/analyze`, `/narrate`, `/immersive`, `/library`, `/artwork/{key}`, `/photos/{key}`, `/audio/{key}`, `/immersive-audio/{key}`) + per-user storage helpers. Every request carries the active profile via the `X-Profile-Id` header; asset endpoints (`/photos`, `/audio`, `/immersive-audio`) can't send headers from `<img>`/`Audio`, so they take a `?persona=` query (with a search fallback). `/artwork/{key}` returns the full stored artwork JSON (feeds the library detail modal). Wikipedia image fetch uses async `httpx` + `curl` fallback (upload.wikimedia.org blocks Python TLS).
 - `analyzer.py` — Claude vision → artwork JSON (system prompt `docs/prompt.md`, strict `json_schema`).
 - `dedup.py` — **Claude dedup agent**: given a new artwork + the persona DB entries, returns the matching `key` or null (semantic match, e.g. "La Joconde" = "Mona Lisa").
-- `narrator.py` — Claude narration text (prompt `docs/narration_prompt.md`) → ElevenLabs audio; also appends to short-term memory.
+- `narrator.py` — Claude narration text (prompt `docs/narration_prompt.md`) → ElevenLabs audio; `narrate(data, profile_text)` takes the visitor's profile text (no global memory file).
 - `matcher.py` — maps the detected artist name to a museum/artist id via alias tables (drives quests).
-- `profile.py` — the profile is a **demo reduced to 2 personas** (`serious` / `fun`), derived from the onboarding *tone* answer; written to `docs/long_term_memory.md`.
+- `profile.py` — the profile is a **demo reduced to 2 personas** (`serious` / `fun`), derived from the onboarding *tone* answer. `build_profile_text(name, persona)` renders the long-term-memory text handed to the narrator; persona/name are stored per-user in `users/{id}/meta.json`.
 
 **Frontend** (`frontend/src/`, React + Vite, inline-style components):
-- `App.tsx` — tab shell + quest progress (localStorage `genz-museum-progress`). `PageI` stays mounted (hidden via `display`) so the last analysis survives tab switches; other pages remount to refresh.
-- `PageI.tsx` — onboarding questionnaire + camera/scan/result flow. Onboarding shows only when not yet onboarded (localStorage `genz-museum-onboarded`) or after "Nouveau profil".
-- `PageII.tsx` — museum/artist quest collection. `PageBiblio.tsx` — session library; tapping a row opens an artwork detail modal (full photo + époque/technique + description via `/artwork/{key}`) with an in-modal play button. `data.ts` — museums/artists/levels.
+- `api.ts` — active profile id (localStorage `animart-profile-id`) + `api()` fetch wrapper that injects `X-Profile-Id`, plus `assetUrl(path, persona)` for `<img>`/`Audio` srcs.
+- `App.tsx` — profile gate (`boot` → `landing` / `onboarding` / `app`) + tab shell + quest progress held in state from `/me`. `PageI` stays mounted (hidden via `display`) so the last analysis survives tab switches; other pages remount to refresh.
+- `Landing.tsx` — first screen: brand + how-it-works, pick an existing profile (`/profiles`) or create a new one. `Onboarding.tsx` — two-step profile creation (questionnaire → `/profile`, then journey planner → `/journey`).
+- `PageI.tsx` — camera/scan/result flow only (idle home shows greeting + journey + profile switcher).
+- `PageII.tsx` — museum/artist quest collection (progress passed as a prop; the journey's target museum is badged). `PageBiblio.tsx` — per-user library; tapping a row opens an artwork detail modal (full photo + époque/technique + description via `/artwork/{key}`) with an in-modal play button. `data.ts` — museums/artists/levels.
 
 ## Data model — two decoupled tiers
 
-1. **Persona DB** (`analyses/serious/`, `analyses/fun/`, each with `audio/` + `photos/` + `{key}.json`): **permanent, shared** cache across all users of that persona. Enables audio reuse. The file `key` is the perceptual hash (`_phash`) of the first photo; the dedup agent matches across different photos of the same work.
-2. **User session** (`docs/session.json` + `docs/short_term_memory.md`): per-user, **reset by `/new-profile`** (which never touches the persona DBs). Drives the library and library/quest dedup.
+1. **Persona DB** (`analyses/serious/`, `analyses/fun/`, each with `audio/` + `immersive/` + `photos/` + `{key}.json`): **permanent, shared** cache across all users of that persona. Enables audio reuse. The file `key` is the perceptual hash (`_phash`) of the first photo; the dedup agent matches across different photos of the same work.
+2. **User profile** (`users/{id}/` with `meta.json` = name/persona/journey, `session.json` = library, `progress.json` = quest counts): **per-user, isolated**, never touches the persona DBs. The client generates the id and sends it as `X-Profile-Id`.
 
-**Scan flow:** analyze → dedup agent searches the persona DB → match: reuse stored json+audio; no match: save new entry. Library + quests get the work **only if its key isn't already in the session** (`in_session`), independent of audio caching — so a work reused from the DB but new to *this* user still counts.
+**Scan flow:** analyze → dedup agent searches the persona DB → match: reuse stored json+audio; no match: save new entry. Library **and** quest progress advance together from the same gate: only if the work's key isn't already in this user's session (`in_session`), independent of audio caching. `/analyze` returns `artist_scans` (the artist's new quest count, or null when nothing was counted) so the UI updates progress without a round-trip.
 
 ## Gotchas
 
-- Memory persists across server restarts (no startup reset); only `/new-profile` clears the session.
+- Library + progress are the same source of truth (server, per-user) — gate both on `in_session`, never on `from_cache` (DB hit). `/analyze` increments progress server-side; the frontend mirrors it from `artist_scans`.
+- Per-user state survives restarts; there's no global reset — a "new profile" is just a fresh client id (old profiles remain in `users/`).
 - Every scan costs an extra Claude call (the dedup agent) once the persona DB is non-empty.
-- `from_cache` (DB hit) and `in_session` (already seen by this user) are distinct — gate quests on `in_session`, not `from_cache`.

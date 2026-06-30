@@ -1,10 +1,10 @@
-from pathlib import Path
+"""Visitor profile → narration persona.
 
-ROOT = Path(__file__).parent.parent
-LONG_TERM_MEMORY = ROOT / "docs" / "long_term_memory.md"
+Démo : le profil utilisateur se résume à 2 personas. Le ton choisi dans le
+questionnaire détermine lequel ; le reste des réponses est ignoré. Le texte de
+profil ci-dessous alimente la mémoire long-terme passée au narrateur.
+"""
 
-# Démo : le profil utilisateur se résume à 2 personas. Le ton choisi dans le
-# questionnaire détermine lequel ; le reste des réponses est ignoré.
 _PERSONA_TEMPLATES = {
     "serious": (
         "# Long-term memory — Visitor profile\n"
@@ -36,25 +36,8 @@ def persona_from_tone(tone: str | None) -> str:
     return "serious" if "sérieux" in t or "serieux" in t or "serious" in t else "fun"
 
 
-def save_profile(data: dict) -> str:
-    persona = persona_from_tone(data.get("tone"))
-    name = (data.get("name") or "").strip()
+def build_profile_text(name: str | None, persona: str) -> str:
+    """The long-term-memory text handed to the narrator for this visitor."""
+    name = (name or "").strip()
     name_line = f"Visitor name: {name}\n" if name else ""
-    text = _PERSONA_TEMPLATES[persona].format(name_line=name_line)
-    LONG_TERM_MEMORY.write_text(text, encoding="utf-8")
-    return persona
-
-
-def load_persona() -> str:
-    content = LONG_TERM_MEMORY.read_text(encoding="utf-8") if LONG_TERM_MEMORY.exists() else ""
-    for line in content.splitlines():
-        if line.strip().startswith("Persona"):
-            return line.split(":", 1)[1].strip()
-    return "fun"
-
-
-def load_profile_text() -> str | None:
-    content = LONG_TERM_MEMORY.read_text(encoding="utf-8") if LONG_TERM_MEMORY.exists() else ""
-    if not content.strip() or content.strip().startswith("_("):
-        return None
-    return content
+    return _PERSONA_TEMPLATES.get(persona, _PERSONA_TEMPLATES["fun"]).format(name_line=name_line)

@@ -10,17 +10,6 @@ def _build_artwork_info(data: dict) -> str:
         lines.append(f"Period: {data['epoque']}")
     if data.get("technique"):
         lines.append(f"Technique: {data['technique']}")
-    if data.get("depicted_moment"):
-        lines.append(f"Depicted dramatic moment: {data['depicted_moment']}")
-    if data.get("narrative_context"):
-        lines.append(f"Established narrative context: {data['narrative_context']}")
-    if data.get("scene_characters"):
-        character_lines = [
-            f"{character['name_or_role']} ({character['presence']}): "
-            f"{character['connection_to_moment']}"
-            for character in data["scene_characters"]
-        ]
-        lines.append("Characters connected to this moment:\n- " + "\n- ".join(character_lines))
     if data.get("sujets"):
         lines.append(f"Subjects: {', '.join(data['sujets'])}")
     if data.get("ambiance"):

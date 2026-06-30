@@ -7,14 +7,13 @@ from elevenlabs.client import ElevenLabs
 
 ROOT = Path(__file__).parent.parent
 NARRATION_PROMPT = ROOT / "docs" / "narration_prompt.md"
-LONG_TERM_MEMORY = ROOT / "docs" / "long_term_memory.md"
 
 DEFAULT_VOICE_ID = "XB0fDUnXU5powFXDhCwa"  # Charlotte — multilingue
 
 
-def _generate_narration_text(data: dict) -> str:
+def _generate_narration_text(data: dict, profile_text: str | None) -> str:
     system = NARRATION_PROMPT.read_text(encoding="utf-8")
-    long_mem = LONG_TERM_MEMORY.read_text(encoding="utf-8") if LONG_TERM_MEMORY.exists() else ""
+    long_mem = profile_text or ""
 
     user_content = f"""## Artwork analysis
 
@@ -36,8 +35,8 @@ def _generate_narration_text(data: dict) -> str:
     return response.content[0].text.strip()
 
 
-def narrate(data: dict) -> bytes:
-    narration_text = _generate_narration_text(data)
+def narrate(data: dict, profile_text: str | None = None) -> bytes:
+    narration_text = _generate_narration_text(data, profile_text)
 
     client = ElevenLabs(api_key=os.environ["ELEVENLABS_API_KEY"])
     voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_VOICE_ID)

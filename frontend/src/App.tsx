@@ -1,17 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import PageI from './PageI'
 import PageII from './PageII'
 import PageBiblio from './PageBiblio'
+import Landing from './Landing'
+import OnboardingFlow from './Onboarding'
 import { getArtistById, getLevel, MAX_SCANS } from './data'
-
-const PROGRESS_KEY = 'genz-museum-progress'
-
-function getProgress(): Record<string, number> {
-  try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') }
-  catch { return {} }
-}
+import { fetchMe, fetchProfiles, getProfileId, newProfileId, setProfileId, type Me, type Profile } from './api'
 
 type Tab = 'camera' | 'achievements' | 'library'
+type View = 'boot' | 'landing' | 'onboarding' | 'app'
 
 interface Toast {
   artistName: string
@@ -22,39 +19,100 @@ interface Toast {
 }
 
 export default function App() {
+  const [view, setView] = useState<View>('boot')
+  const [me, setMe] = useState<Me | null>(null)
+  const [profiles, setProfiles] = useState<Profile[]>([])
+  const [progress, setProgress] = useState<Record<string, number>>({})
   const [tab, setTab] = useState<Tab>('camera')
   const [toast, setToast] = useState<Toast | null>(null)
   const [toastTimer, setToastTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
 
-  function handleArtistFound(artistId: string) {
+  useEffect(() => { boot() }, [])
+
+  async function boot() {
+    if (getProfileId()) {
+      const m = await fetchMe()
+      if (m) return enterApp(m)
+    }
+    setProfiles(await fetchProfiles())
+    setView('landing')
+  }
+
+  function enterApp(m: Me) {
+    setMe(m)
+    setProgress(m.progress || {})
+    setTab('camera')
+    setView('app')
+  }
+
+  async function selectProfile(id: string) {
+    setProfileId(id)
+    setView('boot')
+    const m = await fetchMe()
+    if (m) enterApp(m)
+    else { setProfiles(await fetchProfiles()); setView('landing') }
+  }
+
+  function createProfile() {
+    newProfileId()
+    setView('onboarding')
+  }
+
+  async function onboardingDone() {
+    setView('boot')
+    const m = await fetchMe()
+    if (m) enterApp(m)
+    else setView('landing')
+  }
+
+  async function switchProfile() {
+    setProfiles(await fetchProfiles())
+    setView('landing')
+  }
+
+  // The /analyze response carries the artist's new quest count (or null when
+  // nothing was counted), so library and progress stay in lockstep server-side.
+  function handleArtistFound(artistId: string, scans: number | null) {
+    if (scans == null) return
     const found = getArtistById(artistId)
     if (!found) return
-
-    const prog = getProgress()
-    const prev = prog[artistId] ?? 0
-    if (prev >= MAX_SCANS) return
-
-    const next = Math.min(prev + 1, MAX_SCANS)
-    prog[artistId] = next
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify(prog))
-
+    setProgress((p) => ({ ...p, [artistId]: scans }))
+    if (scans > MAX_SCANS) return
     if (toastTimer) clearTimeout(toastTimer)
     setToast({
       artistName: found.artist.name,
       museumName: found.museum.name,
-      level: getLevel(next),
-      isNew: prev === 0,
+      level: getLevel(scans),
+      isNew: scans === 1,
       color: found.museum.color,
     })
     setToastTimer(setTimeout(() => setToast(null), 3500))
   }
 
+  if (view === 'boot') {
+    return <div style={s.bootScreen}><div style={s.spinner} /></div>
+  }
+
+  if (view === 'landing') {
+    return <Landing profiles={profiles} onSelect={selectProfile} onCreate={createProfile} />
+  }
+
+  if (view === 'onboarding') {
+    return <OnboardingFlow onComplete={onboardingDone} onBack={switchProfile} />
+  }
+
   return (
     <div style={s.root}>
       <div style={s.scrollArea}>
-        <PageI hidden={tab !== 'camera'} onArtistFound={handleArtistFound} onNewProfile={() => localStorage.removeItem(PROGRESS_KEY)} />
-        {tab === 'achievements' && <PageII />}
-        {tab === 'library' && <PageBiblio />}
+        <PageI
+          hidden={tab !== 'camera'}
+          me={me!}
+          onArtistFound={handleArtistFound}
+          onSwitchProfile={switchProfile}
+          onNewProfile={createProfile}
+        />
+        {tab === 'achievements' && <PageII progress={progress} journey={me?.journey ?? null} />}
+        {tab === 'library' && <PageBiblio persona={me?.persona ?? null} />}
       </div>
 
       {toast && (
@@ -105,6 +163,8 @@ const s = {
     flexDirection: 'column' as const,
     position: 'relative' as const,
   },
+  bootScreen: { minHeight: '100vh', background: '#f7f4ef', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  spinner: { width: 40, height: 40, border: '3px solid #e4ddd3', borderTopColor: '#c9a84c', borderRadius: '50%', animation: 'spin .8s linear infinite' },
   scrollArea: {
     flex: 1,
     overflowY: 'auto' as const,
