@@ -1,21 +1,22 @@
 import asyncio
-import base64
-import json
+import os
 import re
 import socket
 import traceback
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import cv2
 import numpy as np
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend import storage, supa
 from backend.analyzer import analyze_artwork
 from backend.dedup import find_existing_artwork
 from backend.immersive import generate_immersive
@@ -26,87 +27,42 @@ from backend.profile import build_profile_text, persona_from_tone
 load_dotenv()
 
 ROOT = Path(__file__).parent.parent
-ANALYSES_DIR = ROOT / "analyses"
-ANALYSES_DIR.mkdir(exist_ok=True)
-
-USERS_DIR = ROOT / "users"
-USERS_DIR.mkdir(exist_ok=True)
-
-MAX_SCANS = 5  # caps an artist's quest level (mirrors frontend data.ts)
 
 
-# ─── Base de données par persona (cache partagé, persistant) ──────────────────
+# ─── Config (env) ───────────────────────────────────────────────────────────────
 
-def _persona_dir(persona: str) -> Path:
-    d = ANALYSES_DIR / persona
-    (d / "audio").mkdir(parents=True, exist_ok=True)
-    (d / "immersive").mkdir(parents=True, exist_ok=True)
-    (d / "photos").mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _db_entries(pdir: Path) -> list[dict]:
-    entries = []
-    for path in pdir.glob("*.json"):
-        try:
-            d = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if d.get("_key"):
-            entries.append({
-                "key": d["_key"],
-                "titre_probable": d.get("titre_probable"),
-                "artiste_probable": d.get("artiste_probable"),
-                "style": d.get("style"),
-                "epoque": d.get("epoque"),
-            })
-    return entries
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
 
 
-# ─── Profils utilisateur (par utilisateur, isolés) ──────────────────────────────
-# Chaque utilisateur a son dossier users/<id>/ avec meta.json (nom, persona,
-# journey), session.json (bibliothèque) et progress.json (avancement des quêtes).
-# La DB persona reste partagée entre tous les utilisateurs (réutilisation audio).
+MAX_SCANS_PER_DAY = _int_env("MAX_SCANS_PER_DAY", 200)        # 0 = illimité
+MAX_CONCURRENT_IMMERSIVE = _int_env("MAX_CONCURRENT_IMMERSIVE", 4)
+THREAD_LIMIT = _int_env("THREAD_LIMIT", 200)                  # appels IO en vol par worker
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
 
-def _read_json(path: Path, default):
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return default
-    return default
+# Génération immersive lourde (ffmpeg + pydub) : on borne la concurrence par worker.
+_immersive_sem = asyncio.Semaphore(MAX_CONCURRENT_IMMERSIVE)
 
 
-def _write_json(path: Path, data) -> None:
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Les appels Claude/ElevenLabs (sync) tournent en to_thread → on agrandit le pool
+    # par défaut pour tenir des dizaines d'appels IO simultanés sans sérialiser.
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=THREAD_LIMIT, thread_name_prefix="iopool")
+    )
+    yield
 
 
-def _profile_id(request: Request) -> str:
-    raw = request.headers.get("X-Profile-Id", "")
-    pid = re.sub(r"[^a-z0-9-]+", "", raw.lower().strip())
-    return pid or "default"
+app = FastAPI(lifespan=lifespan)
 
-
-def _user_dir(request: Request) -> Path:
-    d = USERS_DIR / _profile_id(request)
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _meta(udir: Path) -> dict:
-    return _read_json(udir / "meta.json", {})
-
-
-def _session(udir: Path) -> list[dict]:
-    return _read_json(udir / "session.json", [])
-
-
-def _progress(udir: Path) -> dict:
-    return _read_json(udir / "progress.json", {})
-
-
-def _persona_of(udir: Path) -> str:
-    return _meta(udir).get("persona") or "fun"
+_origins = ["*"] if ALLOWED_ORIGINS.strip() == "*" else [
+    o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()
+]
+app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["*"], allow_headers=["*"])
 
 
 # ─── Image Wikipedia ──────────────────────────────────────────────────────────
@@ -177,133 +133,97 @@ async def _fetch_artwork_image(titre: str | None, artiste: str | None) -> bytes 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-
-@app.get("/profiles")
-async def profiles_route():
-    """All existing profiles, for the login screen."""
-    out = []
-    for d in sorted(USERS_DIR.iterdir()) if USERS_DIR.exists() else []:
-        if not d.is_dir():
-            continue
-        m = _meta(d)
-        if not m.get("id"):
-            continue
-        out.append({
-            "id": m["id"],
-            "name": m.get("name"),
-            "persona": m.get("persona"),
-            "journey": m.get("journey"),
-            "library_count": len(_session(d)),
-            "created_at": m.get("created_at") or "",
-        })
-    out.sort(key=lambda p: p["created_at"], reverse=True)  # newest first
-    return JSONResponse(out)
+@app.get("/health")
+async def health():
+    return {"ok": True}
 
 
 @app.post("/profile")
-async def profile_route(request: Request):
-    """Create or update the active profile (id comes from the X-Profile-Id header)."""
+async def profile_route(request: Request, user_id: str = Depends(supa.current_user)):
+    """Create or update the active profile (identity comes from the verified JWT)."""
     data = await request.json()
-    udir = _user_dir(request)
     persona = persona_from_tone(data.get("tone"))
-    meta = _meta(udir)
-    meta.update({
-        "id": _profile_id(request),
-        "name": (data.get("name") or meta.get("name") or "").strip(),
-        "persona": persona,
-        "created_at": meta.get("created_at") or datetime.now(timezone.utc).isoformat(),
-    })
-    _write_json(udir / "meta.json", meta)
-    return JSONResponse({"ok": True, "id": meta["id"], "persona": persona})
+    existing = await supa.get_profile(user_id)
+    name = (data.get("name") or (existing or {}).get("name") or "").strip()
+    await supa.upsert_profile(user_id, name, persona)
+    return JSONResponse({"ok": True, "id": user_id, "persona": persona})
 
 
 @app.post("/journey")
-async def journey_route(request: Request):
+async def journey_route(request: Request, user_id: str = Depends(supa.current_user)):
     """Persist the visitor's chosen journey (city / museum / artists / era)."""
     data = await request.json()
-    udir = _user_dir(request)
-    meta = _meta(udir)
-    meta["journey"] = data
-    _write_json(udir / "meta.json", meta)
+    await supa.set_journey(user_id, data)
     return JSONResponse({"ok": True})
 
 
 @app.get("/me")
-async def me_route(request: Request):
-    """Everything the app needs to boot for the active profile."""
-    udir = _user_dir(request)
-    m = _meta(udir)
+async def me_route(user_id: str = Depends(supa.current_user)):
+    """Everything the app needs to boot for the active profile (persona null ⇒ onboarding)."""
+    profile = await supa.get_profile(user_id)
+    progress = await supa.get_progress(user_id)
+    count = await supa.library_count(user_id)
     return JSONResponse({
-        "id": m.get("id"),
-        "name": m.get("name"),
-        "persona": m.get("persona"),
-        "journey": m.get("journey"),
-        "progress": _progress(udir),
-        "library_count": len(_session(udir)),
+        "id": user_id,
+        "name": (profile or {}).get("name"),
+        "persona": (profile or {}).get("persona"),
+        "journey": (profile or {}).get("journey"),
+        "progress": progress,
+        "library_count": count,
     })
 
 
 @app.post("/analyze")
-async def analyze(request: Request, file: UploadFile = File(...)):
+async def analyze(request: Request, file: UploadFile = File(...), user_id: str = Depends(supa.current_user)):
     image_bytes = await file.read()
     media_type = file.content_type or "image/jpeg"
     try:
-        udir = _user_dir(request)
-        meta = _meta(udir)
-        persona = _persona_of(udir)
-        pdir = _persona_dir(persona)
-        profile_text = build_profile_text(meta.get("name"), persona)
+        if not await supa.check_and_bump_usage(user_id, MAX_SCANS_PER_DAY):
+            return JSONResponse({"error": "Daily scan limit reached"}, status_code=429)
 
-        result = await asyncio.to_thread(
-            analyze_artwork, image_bytes, media_type, profile_text
-        )
+        profile = await supa.get_profile(user_id)
+        persona = (profile or {}).get("persona") or "fun"
+        profile_text = build_profile_text((profile or {}).get("name"), persona)
+
+        result = await asyncio.to_thread(analyze_artwork, image_bytes, media_type, profile_text)
         result["artist_id"] = match_artist(result.get("artiste_probable"))
 
-        match_key = await asyncio.to_thread(
-            find_existing_artwork, result, _db_entries(pdir)
-        )
+        entries = await supa.db_entries(persona)
+        match_key = await asyncio.to_thread(find_existing_artwork, result, entries)
 
         if match_key:
-            result = json.loads((pdir / f"{match_key}.json").read_text(encoding="utf-8"))
+            art = await supa.find_artwork(persona, match_key)
+            result = art["data"] if art else result
             key = match_key
+            had_photo = bool(art and art.get("has_photo"))
         else:
             key = _phash(image_bytes)
             result["_key"] = key
-            (pdir / f"{key}.json").write_text(
-                json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            await supa.save_artwork(persona, key, result)
+            had_photo = False
 
-        # Always try Wikipedia — overwrites old user photos on repeated scans
+        # Always try Wikipedia — overwrites old photos on repeated scans.
         artwork_img = await _fetch_artwork_image(
             result.get("titre_probable"), result.get("artiste_probable")
         )
-        photo_path = pdir / "photos" / f"{key}.jpg"
         if artwork_img:
-            photo_path.write_bytes(artwork_img)
-        elif not photo_path.exists():
-            photo_path.write_bytes(image_bytes)
+            await storage.upload(persona, "photos", key, artwork_img)
+            await supa.update_artwork(persona, key, {"has_photo": True})
+        elif not had_photo:
+            await storage.upload(persona, "photos", key, image_bytes)
+            await supa.update_artwork(persona, key, {"has_photo": True})
 
-        session = _session(udir)
-        in_session = key in {e["key"] for e in session}
+        # Library and quest progress advance together, from the same gate.
+        in_session = await supa.in_library(user_id, key)
         artist_scans = None
         if not in_session:
-            session.append({
-                "key": key,
-                "titre": result.get("titre_probable"),
-                "artiste": result.get("artiste_probable"),
-                "artist_id": result.get("artist_id"),
-            })
-            _write_json(udir / "session.json", session)
-            # Library and quest progress advance together, from the same gate.
+            await supa.add_to_library(
+                user_id, persona, key,
+                result.get("titre_probable"), result.get("artiste_probable"), result.get("artist_id"),
+            )
             artist_id = result.get("artist_id")
             if artist_id:
-                progress = _progress(udir)
-                progress[artist_id] = progress.get(artist_id, 0) + 1
-                _write_json(udir / "progress.json", progress)
-                artist_scans = progress[artist_id]
+                artist_scans = await supa.bump_progress(user_id, artist_id)
 
         payload = dict(result)
         payload["from_cache"] = match_key is not None
@@ -316,51 +236,48 @@ async def analyze(request: Request, file: UploadFile = File(...)):
 
 
 @app.post("/narrate")
-async def narrate_route(request: Request):
+async def narrate_route(request: Request, user_id: str = Depends(supa.current_user)):
     data = await request.json()
+    key = data.get("_key")
+    if not key:
+        return JSONResponse({"error": "missing _key"}, status_code=400)
     try:
-        udir = _user_dir(request)
-        persona = _persona_of(udir)
-        pdir = _persona_dir(persona)
-        key = data.get("_key")
-        if key:
-            audio_file = pdir / "audio" / f"{key}.mp3"
-            if audio_file.exists():
-                return Response(content=audio_file.read_bytes(), media_type="audio/mpeg")
+        profile = await supa.get_profile(user_id)
+        persona = (profile or {}).get("persona") or "fun"
 
-        profile_text = build_profile_text(_meta(udir).get("name"), persona)
-        audio_bytes = await asyncio.to_thread(narrate, data, profile_text)
+        art = await supa.find_artwork(persona, key)
+        if not (art and art.get("has_audio")):
+            profile_text = build_profile_text((profile or {}).get("name"), persona)
+            audio_bytes = await asyncio.to_thread(narrate, data, profile_text)
+            await storage.upload(persona, "audio", key, audio_bytes)
+            await supa.update_artwork(persona, key, {"has_audio": True})
 
-        if key:
-            (pdir / "audio" / f"{key}.mp3").write_bytes(audio_bytes)
-
-        return Response(content=audio_bytes, media_type="audio/mpeg")
+        return JSONResponse({"audio_url": storage.public_url(persona, "audio", key)})
     except Exception as e:
+        traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.post("/immersive")
-async def immersive_route(request: Request):
+async def immersive_route(request: Request, user_id: str = Depends(supa.current_user)):
     data = await request.json()
+    key = data.get("_key")
+    if not key:
+        return JSONResponse({"error": "missing _key"}, status_code=400)
     try:
-        pdir = _persona_dir(_persona_of(_user_dir(request)))
-        key = data.get("_key")
-        audio_file = pdir / "immersive" / f"{key}.mp3" if key else None
-        captions_file = pdir / "immersive" / f"{key}.captions.json" if key else None
+        persona = await supa.persona_of(user_id)
 
-        if audio_file and captions_file and audio_file.exists() and captions_file.exists():
-            audio_bytes = audio_file.read_bytes()
-            captions = json.loads(captions_file.read_text(encoding="utf-8"))
+        art = await supa.find_artwork(persona, key)
+        if art and art.get("has_immersive"):
+            captions = art.get("captions") or []
         else:
-            audio_bytes, captions = await asyncio.to_thread(generate_immersive, data)
-            if audio_file and captions_file:
-                audio_file.write_bytes(audio_bytes)
-                captions_file.write_text(
-                    json.dumps(captions, ensure_ascii=False), encoding="utf-8"
-                )
+            async with _immersive_sem:
+                audio_bytes, captions = await asyncio.to_thread(generate_immersive, data)
+            await storage.upload(persona, "immersive", key, audio_bytes)
+            await supa.update_artwork(persona, key, {"has_immersive": True, "captions": captions})
 
         return JSONResponse({
-            "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
+            "audio_url": storage.public_url(persona, "immersive", key),
             "captions": captions,
         })
     except Exception as e:
@@ -369,20 +286,22 @@ async def immersive_route(request: Request):
 
 
 @app.get("/library")
-async def library_route(request: Request):
-    udir = _user_dir(request)
-    pdir = _persona_dir(_persona_of(udir))
+async def library_route(user_id: str = Depends(supa.current_user)):
+    profile = await supa.get_profile(user_id)
+    persona = (profile or {}).get("persona") or "fun"
+    rows = await supa.get_library(user_id)  # newest-first
+    flags = await supa.artworks_flags(persona, [e["key"] for e in rows])
     items = []
-    for e in reversed(_session(udir)):
-        key = e["key"]
-        has_narration = (pdir / "audio" / f"{key}.mp3").exists()
-        has_immersive = (pdir / "immersive" / f"{key}.mp3").exists()
+    for e in rows:
+        f = flags.get(e["key"], {})
+        has_narration = bool(f.get("has_audio"))
+        has_immersive = bool(f.get("has_immersive"))
         items.append({
-            "phash": key,
+            "phash": e["key"],
             "titre": e.get("titre"),
             "artiste": e.get("artiste"),
             "artist_id": e.get("artist_id"),
-            "has_photo": (pdir / "photos" / f"{key}.jpg").exists(),
+            "has_photo": bool(f.get("has_photo")),
             "has_audio": has_narration or has_immersive,
             "audio_mode": "narrate" if has_narration else "immersive" if has_immersive else None,
         })
@@ -390,58 +309,43 @@ async def library_route(request: Request):
 
 
 @app.get("/artwork/{key}")
-async def get_artwork(key: str, request: Request):
-    f = _persona_dir(_persona_of(_user_dir(request))) / f"{_safe_seg(key)}.json"
-    if not f.exists():
+async def get_artwork(key: str, user_id: str = Depends(supa.current_user)):
+    persona = await supa.persona_of(user_id)
+    art = await supa.find_artwork(persona, _safe_seg(key))
+    if not art:
         return JSONResponse({"error": "not found"}, status_code=404)
-    return JSONResponse(json.loads(f.read_text(encoding="utf-8")))
+    return JSONResponse(art["data"])
 
 
-# Asset endpoints are loaded via <img>/Audio src, which can't send headers —
-# the frontend passes the persona as a query param (with a search fallback).
+# Asset endpoints are loaded via <img>/Audio src (can't send headers) and just
+# redirect to the public CDN URL — no bytes flow through the backend. The frontend
+# passes its active persona as a query param.
 
 def _safe_seg(s: str | None) -> str:
     """Strip a path segment to safe chars — persona/key come from the client."""
     return re.sub(r"[^a-z0-9_-]+", "", (s or "").lower())
 
 
-def _persona_asset(persona: str | None, subdir: str, key: str, ext: str) -> Path | None:
-    key = _safe_seg(key)
-    persona = _safe_seg(persona)
-    candidates = []
-    if persona:
-        candidates.append(ANALYSES_DIR / persona / subdir / f"{key}.{ext}")
-    for d in sorted(ANALYSES_DIR.iterdir()) if ANALYSES_DIR.exists() else []:
-        if d.is_dir():
-            candidates.append(d / subdir / f"{key}.{ext}")
-    for f in candidates:
-        if f.exists():
-            return f
-    return None
+def _asset_redirect(persona: str | None, kind: str, key: str) -> RedirectResponse:
+    return RedirectResponse(
+        storage.public_url(_safe_seg(persona) or "fun", kind, _safe_seg(key)),
+        status_code=307,
+    )
 
 
 @app.get("/photos/{key}")
 async def get_photo(key: str, persona: str | None = None):
-    f = _persona_asset(persona, "photos", key, "jpg")
-    if not f:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    return Response(content=f.read_bytes(), media_type="image/jpeg")
+    return _asset_redirect(persona, "photos", key)
 
 
 @app.get("/audio/{key}")
 async def get_audio(key: str, persona: str | None = None):
-    f = _persona_asset(persona, "audio", key, "mp3")
-    if not f:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    return Response(content=f.read_bytes(), media_type="audio/mpeg")
+    return _asset_redirect(persona, "audio", key)
 
 
 @app.get("/immersive-audio/{key}")
 async def get_immersive_audio(key: str, persona: str | None = None):
-    f = _persona_asset(persona, "immersive", key, "mp3")
-    if not f:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    return Response(content=f.read_bytes(), media_type="audio/mpeg")
+    return _asset_redirect(persona, "immersive", key)
 
 
 def _phash(image_bytes: bytes) -> str:
@@ -461,6 +365,8 @@ def _phash(image_bytes: bytes) -> str:
     return f"{val:016x}"
 
 
+# Le SPA buildé est servi par le même serveur (monolithe). Monté en dernier pour ne
+# pas masquer les routes API ci-dessus.
 dist = ROOT / "frontend" / "dist"
 if dist.exists():
     app.mount("/", StaticFiles(directory=str(dist), html=True), name="static")

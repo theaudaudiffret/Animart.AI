@@ -1,18 +1,14 @@
-// Per-user profile identity + a fetch wrapper that tags every request with it.
-// The active profile id lives in localStorage and is sent as X-Profile-Id so the
-// backend can keep each visitor's library, progress and persona isolated.
+// Auth Supabase + un wrapper fetch qui attache le JWT du visiteur à chaque requête.
+// Le client n'utilise Supabase QUE pour l'auth ; toutes les données passent par
+// l'API FastAPI (qui vérifie le JWT et isole chaque utilisateur via la service_role).
 
+import { createClient, type Session } from '@supabase/supabase-js'
 import type { JourneyPlan } from './types'
 
-const PROFILE_ID_KEY = 'animart-profile-id'
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
 
-export interface Profile {
-  id: string
-  name: string | null
-  persona: 'serious' | 'fun' | null
-  journey: JourneyPlan | null
-  library_count: number
-}
+export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 export interface Me {
   id: string | null
@@ -23,42 +19,42 @@ export interface Me {
   library_count: number
 }
 
-export function getProfileId(): string | null {
-  return localStorage.getItem(PROFILE_ID_KEY)
+export async function getSession(): Promise<Session | null> {
+  const { data } = await supabase.auth.getSession()
+  return data.session
 }
 
-export function setProfileId(id: string): void {
-  localStorage.setItem(PROFILE_ID_KEY, id)
+// Inscription. Renvoie true si une session est ouverte immédiatement (confirmation
+// d'email désactivée), false s'il faut confirmer par email avant de se connecter.
+export async function signUp(email: string, password: string): Promise<boolean> {
+  const { data, error } = await supabase.auth.signUp({ email, password })
+  if (error) throw error
+  return !!data.session
 }
 
-export function newProfileId(): string {
-  const rand = Math.random().toString(36).slice(2, 10)
-  const id = `p-${Date.now().toString(36)}${rand}`
-  setProfileId(id)
-  return id
+export async function signIn(email: string, password: string): Promise<void> {
+  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) throw error
 }
 
-// fetch with the active profile id attached. Throws on non-2xx.
+export async function signOut(): Promise<void> {
+  await supabase.auth.signOut()
+}
+
+// fetch avec le token courant attaché. Lève sur non-2xx.
 export async function api(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers)
-  const id = getProfileId()
-  if (id) headers.set('X-Profile-Id', id)
+  const { data } = await supabase.auth.getSession()
+  const token = data.session?.access_token
+  if (token) headers.set('Authorization', `Bearer ${token}`)
   const res = await fetch(path, { ...init, headers })
   if (!res.ok) throw new Error(`Server error (${res.status})`)
   return res
 }
 
-// <img>/Audio src can't send headers — the persona goes in the query instead.
+// <img>/Audio src ne peuvent pas envoyer de header — la persona va dans la query.
 export function assetUrl(path: string, persona: string | null): string {
   return persona ? `${path}?persona=${encodeURIComponent(persona)}` : path
-}
-
-export async function fetchProfiles(): Promise<Profile[]> {
-  try {
-    return await (await fetch('/profiles')).json()
-  } catch {
-    return []
-  }
 }
 
 export async function fetchMe(): Promise<Me | null> {

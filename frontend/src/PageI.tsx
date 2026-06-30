@@ -27,13 +27,6 @@ function resizeImage(file: File): Promise<Blob> {
   })
 }
 
-function base64ToBlob(base64: string, mimeType: string): Blob {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return new Blob([bytes], { type: mimeType })
-}
-
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type AudioMode = 'narrate' | 'immersive'
 
@@ -43,11 +36,10 @@ type State =
   | { status: 'result'; preview: string; data: ArtworkSummary }
   | { status: 'error'; preview: string; message: string }
 
-export default function PageI({ me, onArtistFound, onSwitchProfile, onNewProfile, hidden }: {
+export default function PageI({ me, onArtistFound, onSignOut, hidden }: {
   me: Me
   onArtistFound: (id: string, scans: number | null) => void
-  onSwitchProfile: () => void
-  onNewProfile: () => void
+  onSignOut: () => void
   hidden: boolean
 }) {
   const [state, setState] = useState<State>({ status: 'idle' })
@@ -99,18 +91,16 @@ export default function PageI({ me, onArtistFound, onSwitchProfile, onNewProfile
         body: JSON.stringify(data),
       })
 
-      let blob: Blob
+      // Les deux endpoints renvoient l'URL CDN de l'audio (servi par Supabase Storage,
+      // pas streamé par le backend) ; l'immersif ajoute les captions.
+      const body: { audio_url: string; captions?: Caption[] } = await res.json()
       let sceneCaptions: Caption[] = []
       if (mode === 'immersive') {
-        const body: { audio_base64: string; captions: Caption[] } = await res.json()
-        blob = base64ToBlob(body.audio_base64, 'audio/mpeg')
-        sceneCaptions = body.captions
+        sceneCaptions = body.captions ?? []
         setCaptions(sceneCaptions)
-      } else {
-        blob = await res.blob()
       }
 
-      const audio = new Audio(URL.createObjectURL(blob))
+      const audio = new Audio(body.audio_url)
       audio.onended = () => {
         setPlaying(null)
         setProgress((p) => ({ ...p, cur: p.dur }))
@@ -209,7 +199,7 @@ export default function PageI({ me, onArtistFound, onSwitchProfile, onNewProfile
       />
 
       {state.status === 'idle' && (
-        <Idle me={me} onShoot={() => inputRef.current?.click()} onSwitchProfile={onSwitchProfile} onNewProfile={onNewProfile} />
+        <Idle me={me} onShoot={() => inputRef.current?.click()} onSignOut={onSignOut} />
       )}
 
       {state.status !== 'idle' && <img src={state.preview} alt="" style={s.preview} />}
@@ -250,12 +240,11 @@ export default function PageI({ me, onArtistFound, onSwitchProfile, onNewProfile
 }
 
 // Idle/home screen: greeting, the planned journey, the big shoot button, and
-// the profile switcher.
-function Idle({ me, onShoot, onSwitchProfile, onNewProfile }: {
+// the sign-out link.
+function Idle({ me, onShoot, onSignOut }: {
   me: Me
   onShoot: () => void
-  onSwitchProfile: () => void
-  onNewProfile: () => void
+  onSignOut: () => void
 }) {
   const journey = me.journey
   return (
@@ -293,9 +282,7 @@ function Idle({ me, onShoot, onSwitchProfile, onNewProfile }: {
       </div>
 
       <div style={s.profileFooter}>
-        <button style={s.linkBtn} onClick={onSwitchProfile}>Switch profile</button>
-        <span style={s.footerDot}>·</span>
-        <button style={s.linkBtn} onClick={onNewProfile}>New profile</button>
+        <button style={s.linkBtn} onClick={onSignOut}>Sign out</button>
       </div>
     </div>
   )
@@ -546,7 +533,6 @@ const s = {
 
   profileFooter: { display: 'flex', alignItems: 'center', gap: 8 },
   linkBtn: { background: 'none', color: '#1c1812', border: 'none', fontSize: '.74rem', opacity: 0.4, cursor: 'pointer', textDecoration: 'underline' as const, fontFamily: SANS, padding: 0 },
-  footerDot: { color: '#1c1812', opacity: 0.3, fontSize: '.74rem' },
 
   btn: { background: '#1c1812', color: '#f7f4ef', border: 'none', borderRadius: 8, padding: '.85rem 2rem', fontSize: '.88rem', fontWeight: 600, letterSpacing: '.04em', cursor: 'pointer', width: '100%', maxWidth: 320, fontFamily: SANS },
   audioChoice: { display: 'flex', flexDirection: 'column' as const, gap: 8, width: '100%' },

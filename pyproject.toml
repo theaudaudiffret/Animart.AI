@@ -6,15 +6,18 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.53.0",
-    "opencv-python>=4.10.0",
+    "opencv-python-headless>=4.10.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.32.0",
+    "gunicorn>=23.0.0",
     "python-multipart>=0.0.12",
     "python-dotenv>=1.0.0",
     "elevenlabs>=1.0.0",
     "pydub>=0.25.1",
     "pydantic>=2.13.4",
     "ffmpeg>=1.4",
+    "supabase>=2.9.0",
+    "pyjwt[crypto]>=2.9.0",
 ]
 
 [tool.setuptools]

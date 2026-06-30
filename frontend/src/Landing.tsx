@@ -1,22 +1,11 @@
-import type { Profile } from './api'
-
 const STEPS = [
   { glyph: '⊙', title: 'Photograph', text: 'Point your camera at any artwork.' },
   { glyph: '♪', title: 'Listen', text: 'Get a commentary tuned to your taste.' },
   { glyph: '◈', title: 'Collect', text: 'Unlock artists and fill your library.' },
 ]
 
-const PERSONA_LABEL: Record<string, string> = { serious: 'Serious tone', fun: 'Playful tone' }
-
-// First screen: brand + how-it-works, then either continue as an existing
-// profile or create a new one.
-export default function Landing({ profiles, onSelect, onCreate }: {
-  profiles: Profile[]
-  onSelect: (id: string) => void
-  onCreate: () => void
-}) {
-  const hasProfiles = profiles.length > 0
-
+// First screen: brand + how-it-works, then sign in / create an account.
+export default function Landing({ onGetStarted }: { onGetStarted: () => void }) {
   return (
     <div style={s.page}>
       <div style={s.hero}>
@@ -36,30 +25,7 @@ export default function Landing({ profiles, onSelect, onCreate }: {
         ))}
       </div>
 
-      {hasProfiles && (
-        <div style={s.profiles}>
-          <div style={s.sectionLabel}>Continue as</div>
-          {profiles.map((p) => (
-            <button key={p.id} style={s.profileRow} onClick={() => onSelect(p.id)}>
-              <span style={{ ...s.avatar, background: p.persona === 'serious' ? '#4E8A6E22' : '#D44C3122', color: p.persona === 'serious' ? '#4E8A6E' : '#D44C31' }}>
-                {(p.name || '?').trim().charAt(0).toUpperCase()}
-              </span>
-              <span style={s.profileInfo}>
-                <span style={s.profileName}>{p.name || 'Visitor'}</span>
-                <span style={s.profileMeta}>
-                  {(p.persona && PERSONA_LABEL[p.persona]) || 'Profile'}
-                  {p.library_count > 0 ? ` · ${p.library_count} artwork${p.library_count > 1 ? 's' : ''}` : ''}
-                </span>
-              </span>
-              <span style={s.profileArrow}>→</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <button style={hasProfiles ? s.secondaryBtn : s.primaryBtn} onClick={onCreate}>
-        {hasProfiles ? '+ New profile' : 'Get started →'}
-      </button>
+      <button style={s.primaryBtn} onClick={onGetStarted}>Get started →</button>
     </div>
   )
 }
@@ -80,15 +46,5 @@ const s = {
   stepTitle: { fontFamily: SANS, fontSize: '.85rem', fontWeight: 600, color: '#1c1812' },
   stepSub: { fontFamily: SANS, fontSize: '.74rem', color: '#1c1812', opacity: 0.5 },
 
-  profiles: { display: 'flex', flexDirection: 'column' as const, gap: 8 },
-  sectionLabel: { fontFamily: PLAYFAIR, fontStyle: 'italic' as const, fontSize: '.72rem', letterSpacing: '.06em', color: '#1c1812', opacity: 0.5, marginBottom: 2 },
-  profileRow: { display: 'flex', alignItems: 'center', gap: 12, background: '#ffffff', border: '1px solid #e8e2d8', borderRadius: 10, padding: '.7rem .9rem', cursor: 'pointer', textAlign: 'left' as const, boxShadow: '0 1px 3px rgba(0,0,0,.05)' },
-  avatar: { width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: PLAYFAIR, fontSize: '1.1rem', fontWeight: 600, flexShrink: 0 },
-  profileInfo: { display: 'flex', flexDirection: 'column' as const, gap: 1, flex: 1, minWidth: 0 },
-  profileName: { fontFamily: PLAYFAIR, fontSize: '1rem', color: '#1c1812' },
-  profileMeta: { fontFamily: SANS, fontSize: '.7rem', color: '#1c1812', opacity: 0.45 },
-  profileArrow: { color: '#a67c2a', fontSize: '1rem', flexShrink: 0 },
-
   primaryBtn: { width: '100%', background: 'linear-gradient(135deg, #c9a84c, #a67c2a)', color: '#fff', border: 'none', borderRadius: 10, padding: '1rem', fontSize: '.95rem', letterSpacing: '.04em', fontWeight: 600, cursor: 'pointer', fontFamily: SANS, boxShadow: '0 4px 16px rgba(166,124,42,.3)' },
-  secondaryBtn: { width: '100%', background: 'none', color: '#1c1812', border: '1.5px solid #d8d0c4', borderRadius: 10, padding: '.85rem', fontSize: '.88rem', letterSpacing: '.04em', fontWeight: 500, cursor: 'pointer', fontFamily: SANS },
 } as const

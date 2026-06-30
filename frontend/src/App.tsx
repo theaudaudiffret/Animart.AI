@@ -3,12 +3,14 @@ import PageI from './PageI'
 import PageII from './PageII'
 import PageBiblio from './PageBiblio'
 import Landing from './Landing'
+import Auth from './Auth'
 import OnboardingFlow from './Onboarding'
 import { getArtistById, getLevel, MAX_SCANS } from './data'
-import { fetchMe, fetchProfiles, getProfileId, newProfileId, setProfileId, type Me, type Profile } from './api'
+import { fetchMe, signOut, supabase, type Me } from './api'
 
 type Tab = 'camera' | 'achievements' | 'library'
-type View = 'boot' | 'landing' | 'onboarding' | 'app'
+// 'boot' = session inconnue ; 'landing'/'auth' = non connecté ; sinon connecté.
+type View = 'boot' | 'landing' | 'auth' | 'onboarding' | 'app'
 
 interface Toast {
   artistName: string
@@ -21,53 +23,45 @@ interface Toast {
 export default function App() {
   const [view, setView] = useState<View>('boot')
   const [me, setMe] = useState<Me | null>(null)
-  const [profiles, setProfiles] = useState<Profile[]>([])
   const [progress, setProgress] = useState<Record<string, number>>({})
   const [tab, setTab] = useState<Tab>('camera')
   const [toast, setToast] = useState<Toast | null>(null)
   const [toastTimer, setToastTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => { boot() }, [])
+  // Source de vérité = l'état d'auth Supabase. onAuthStateChange fire aussi au montage
+  // (INITIAL_SESSION). On ne fait pas d'appel Supabase async DANS le callback (deadlock
+  // connu) → on diffère le chargement du profil via setTimeout.
+  useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        setTimeout(loadProfile, 0)
+      } else {
+        setMe(null)
+        setProgress({})
+        setView((v) => (v === 'auth' ? 'auth' : 'landing'))
+      }
+    })
+    return () => sub.subscription.unsubscribe()
+  }, [])
 
-  async function boot() {
-    if (getProfileId()) {
-      const m = await fetchMe()
-      if (m) return enterApp(m)
-    }
-    setProfiles(await fetchProfiles())
-    setView('landing')
-  }
-
-  function enterApp(m: Me) {
-    setMe(m)
-    setProgress(m.progress || {})
-    setTab('camera')
-    setView('app')
-  }
-
-  async function selectProfile(id: string) {
-    setProfileId(id)
-    setView('boot')
+  async function loadProfile() {
     const m = await fetchMe()
-    if (m) enterApp(m)
-    else { setProfiles(await fetchProfiles()); setView('landing') }
-  }
-
-  function createProfile() {
-    newProfileId()
-    setView('onboarding')
+    setMe(m)
+    if (m?.persona) {
+      setProgress(m.progress || {})
+      setTab('camera')
+      setView('app')
+    } else {
+      setView('onboarding')  // connecté mais pas encore de profil
+    }
   }
 
   async function onboardingDone() {
-    setView('boot')
-    const m = await fetchMe()
-    if (m) enterApp(m)
-    else setView('landing')
+    await loadProfile()
   }
 
-  async function switchProfile() {
-    setProfiles(await fetchProfiles())
-    setView('landing')
+  function leaveToLanding() {
+    void signOut()  // déclenche onAuthStateChange → 'landing'
   }
 
   // The /analyze response carries the artist's new quest count (or null when
@@ -94,11 +88,15 @@ export default function App() {
   }
 
   if (view === 'landing') {
-    return <Landing profiles={profiles} onSelect={selectProfile} onCreate={createProfile} />
+    return <Landing onGetStarted={() => setView('auth')} />
+  }
+
+  if (view === 'auth') {
+    return <Auth onBack={() => setView('landing')} />
   }
 
   if (view === 'onboarding') {
-    return <OnboardingFlow onComplete={onboardingDone} onBack={switchProfile} />
+    return <OnboardingFlow onComplete={onboardingDone} onBack={leaveToLanding} />
   }
 
   return (
@@ -108,8 +106,7 @@ export default function App() {
           hidden={tab !== 'camera'}
           me={me!}
           onArtistFound={handleArtistFound}
-          onSwitchProfile={switchProfile}
-          onNewProfile={createProfile}
+          onSignOut={leaveToLanding}
         />
         {tab === 'achievements' && <PageII progress={progress} journey={me?.journey ?? null} />}
         {tab === 'library' && <PageBiblio persona={me?.persona ?? null} />}
