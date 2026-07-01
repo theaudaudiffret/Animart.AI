@@ -59,7 +59,7 @@ def analyze_artwork(image_bytes: bytes, media_type: str, visitor_profile: str | 
     client = anthropic.Anthropic()
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=2048,
+        max_tokens=1024,
         system=system_prompt,
         messages=[{
             "role": "user",

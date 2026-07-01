@@ -27,7 +27,7 @@ def _generate_narration_text(data: dict, profile_text: str | None) -> str:
 
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model="claude-opus-4-8",
+        model="claude-sonnet-4-6",
         max_tokens=512,
         system=system,
         messages=[{"role": "user", "content": user_content}],
